@@ -1,0 +1,96 @@
+## One variable per row, comments start with #
+## Empty rows ignored. Rows with numbers and without descriptions are placeholders for future variables.
+## Arguments not provided should be replaced with '*'.
+## Values in parentheses are the index in the vector where value is stored.
+## '~' after the value indicates that this value is required
+## '+' after the value indicates that one of these adjacent options is required
+## 'x' after the value indicates that this feature is not yet functional
+
+######################## Output settings ########################
+BATCH_NAME #(1) Batch name, used as prefix for output files. Only letters, numbers and underscore.
+1 #(2) Summary output on/off (1/0) - one line per replicate with # infected, duration, seed info, run time
+1 #(3) Detailed infection output on/off (1/0) - one line per exposed premises with time, source of infection, route of infection
+0 #(4) Print grid cells on/off
+0 #(5)xAdditional functionality under development. Do not change default value.
+0 #(6)xAdditional functionality under development. Do not change default value.
+* #(7)
+* #(8)
+* #(9)
+* #(10)
+
+######################## General settings ########################
+FLAPS_LOCATION		#(11)~Name of file containing premises ID, FIPS, x, y, population - ie FLAPS_beefdairy_20151201_formatted.txt. Make sure the premises file doesn't have numbers in 1e+05 format (may happen with IDs)
+beef,dairy 			#(12)~List of species for which counts are provided in premises file, comma-separated
+365 				#(13)~Timesteps (days) to run
+*	#(14) Max infectious premises before stopping an outbreak (* = no limit)
+1 	#(15)~Verbose level: Output extra information to console as model runs (0=off, 1=basic steps, 2=debug)
+0 	#(16)x~Disabled
+0 	#(17)~Reverse x/y option: in case input file is entered as lat/long (y/x)(set to 1) instead of long/lat (x/y)(set to 0)
+inputfiles/FIPS_20151805.txt #(18)~Name of file containing fips name, state name, area (m2), x, y. Tab separated.
+0	#(19) Day of the year to start simulation/generation on (jan 1 = day 1). Must be 0 - 365. 0 = one random day [1-365].
+* #(20)
+
+######################## Infection-related settings ########################
+allFips  #(21)~Seed source, filename or "allFips". Filename is of file containing identifiers (FIPS codes or premisesIDs) from which to seed infection, one line per simulation. "allFips" specifies to choose from all counties containing premises. To seed from multiple premises at once, provide comma-separated premisesIDs in the file (one line per simulation).
+fips 		#(22)~Seed file type - type of information provided per line of (21). "fips" = choose 1 premises at random within the FIPS code on a given line in (21) or in all FIPS, "singlePremises" = use the premisesID provided on a given line in (21), "multiplePremises" = use all comma separated premisesIDs on a given line in (21)
+*	#(23)
+1,1 	#(24)~Susceptibility exponents(mu), species-specific & comma-separated in order listed in (12) 0.42,0.49
+1,1 	#(25)~Infectiousness exponents(omega), species-specific & comma-separated in order listed in (12) 0.41,0.2
+1,1		#(26)~Susceptibility constants(a), species-specific & comma-separated in order listed in (12) 5.7,1
+5.8, 5.8  #(27)~Infectiousness constants(b), species-specific & comma-separated in order listed in (12)0.00082,0.00083
+0			#(28)~Kernel type for local (diffusion) spread: 0: k1/(1 + (distance/k2)^k3), 1: data file in (30), 2: k1/(1+d/k2)^k3
+1.293833e-08, 2116.798, 2.38	#(29)x~Kernel parameters k1, k2, k3
+*		#(30) Name of file containing data-based local spread probabilities by distance, ie inputfiles/UKDataKernel.txt
+5,0 		#(31)~Mean, variance (around normal) days from premises exposure to infectiousness (latency duration)
+7,0 		#(32)~Mean, variance (around normal) days from premises infectiousness to immunity (infectiousness duration)
+0	      #(33)+Additional functionality under development. Do not change default value.
+* #(34)+Additional functionality under development. Do not change default value.
+* #(35)
+
+######################## Grid-related settings ########################
+* 				#(36)+Filename containing grid cells (will override other options)
+* 				#(37)+Length of cell side for uniform cells (will override density options)
+500,100000 	#(38)+Max farms per cell, cell size minimum side length in m
+* #(39)
+* #(40)
+
+######################## Shipment-related settings ########################
+1 	#(41)~Method(s) to generate county-county shipments (USAMM), comma-separated (1 = USAMM version 1, -1 = shipments off)
+1 	#(42)~Timepoints at which to begin using each of the methods above (first timepoint must be 1), comma-separated
+0 	#(43)xAdditional functionality under development. Do not change default value.
+inputfiles/usammv1_beef.res, inputfiles/usammv1_dairy.res #(44) Output files from USAMM with parameters for a, b, N, s and covariates
+Q1 #(45) Additional functionality under development. Do not change default value.
+1 #(46) Additional functionality under development. Do not change default value.
+*,* #(47) Origin covariates for all counties. One file for each species, comma separated. Must have header: FIPS, name1, name2... Names must match name component of covariate parameters in USAMM parameter file.
+*,* #(48) Destination covariates for all counties. One file for each species, comma separated. Must have header: FIPS, name1, name2... Names must match name component of covariate parameters in USAMM parameter file.
+*,* #(49) Disabled
+1 #(50) Exposed shipments, shipping from a farm with status exposed will cause the receiver to become exposed as well. 1 = on, 0 = off
+
+######################## Control-related settings ########################
+shipBan,cull,vax #(51)~Names for unique control types, comma-separated (fixed options: shipBan, cull, vax) '*' will turn off control.
+noLimit,stateSum,dailyLimit	#(52) Control constraint function types, comma-separated
+0;240,0;6804,0	#(53) Control constraint parameters, comma-separated parameters, SEMICOLON-separated by type. stateSum: constraint is mean/var max animals/day/premises. 20 cows/hr*12 hrs/day = 240
+state,premises,premises #(54)~Spatial scale at which control is applied, comma-separated (fixed options: premises, county (shipBan only), state (shipBan only))
+NA;inputfiles/landfills_formatted.txt;NA #(55) List additional files here, comma-separated, SEMICOLON-separated by type
+NA;resourceLocs;NA #(56) Specify file types for (55) here: (NA, resourceLocs) comma-separated, SEMICOLON-separated by type
+0,0,11 #(57)~Implemented to effective: mean number of days, comma-separated for each control type
+0,0,0 #(58)~Implemented to effective: variance number of days, comma-separated for each control type
+366,366,183 #(59)~Effective to inactive: mean number of days, comma-separated for each control type
+0,0,0	#(60)~Effective to inactive: variance number of days, comma-separated for each control type
+1,1;1,1;1,1 #(61)~Effectiveness (including compliance) of control types as proportion, comma-separated probability of preventing exposure given exposure and probability of transmission given infectiousness. SEMICOLON-separated by type.
+* #(62)
+newRegionReportsOverX,newPremReportsOverX,newPremReportsOverX #(63)~Control triggers, comma-separated (fixed options). '*' will turn off control.
+0,0,0 #(64)~Control trigger thresholds, comma-separated (numeric)
+shipBan,cull,vax #(65)~Control trigger responses, comma-separated (must exist in (51))
+0,0,-1 #(66)~Control response targets, comma-separated. -1 = DCs, 0 = triggers only, # = radius in units of x/y coordinates of premises
+earliest,earliest,earliest #(67)~Control response priority, comma-separated. Currently only accepts earliest for each control type.
+* #(68)
+* #(69)
+* #(70)
+
+######################## Reporting and Tracing (DC) settings ########################
+15,0		#(71)x~Mean, variance days from INDEX premises exposure to reporting
+8,0 	#(72)~Mean, variance days from (non-dangerous-contact) premises exposure to reporting
+2,0 	#(73)~Mean, variance days from (dangerous-contact) premises exposure to reporting
+sus,4; exp,5 #(74) Dangerous Contact scaling parameters relative to risk: status, then scale, SEMICOLON-separated (only used if at least one of (66) is -1)
+* #(75)

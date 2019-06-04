@@ -1,0 +1,16 @@
+#!/bin/bash
+
+##SBATCH -J JOBNAME
+
+#SBATCH -t 24:00:00
+#SBATCH -n 1
+#SBATCH -o JOBNAME.out
+#SBATCH -e JOBNAME.err
+
+#
+
+module load gcc/6.1.0
+./USDOSv2_new CONFIGNAME
+
+
+# End of script, no wait needed

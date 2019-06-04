@@ -1,0 +1,3 @@
+Rep	ExposedID	atTime	SourceID	InfRoute	ControlPrevented
+1	134	4	133	0	none
+1	40031	4	133	1	none
