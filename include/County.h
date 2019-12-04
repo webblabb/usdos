@@ -26,7 +26,6 @@ To create a complete county:
 #include <map>
 #include <gsl_rng.h>
 #include "Region.h"
-#include "Alias_table.h"
 
 extern int verboseLevel;
 
@@ -87,7 +86,7 @@ private:
     double area;
     State* parent_state;
     std::vector<Farm*> member_farms;
-    std::mt19937 mt19937_generator;
+    //std::mt19937 mt19937_generator;
     std::map<Farm_type*, std::vector<std::string>> ocov_names;
     std::map<Farm_type*, std::vector<double>> ocov_values;
     std::map<Farm_type*, std::vector<std::string>> dcov_names;
@@ -100,7 +99,7 @@ private:
     std::map<Farm_type*, double> weighted_avg_d_farm_weights;
     std::unordered_map<Farm_type*, std::vector<Farm*>> farms_by_type;
     std::unordered_map<Farm_type*, double> poisson_mean;
-    std::unordered_map<Farm_type*, std::poisson_distribution<int>*> poisson_map;
+//    std::unordered_map<Farm_type*, std::poisson_distribution<int>*> poisson_map;
 //    std::vector<Alias_table<County*>> shipping_probabilities; //By farm type index.
     std::vector<double*> shipping_probabilities;
     std::vector<size_t> n_outcomes;

@@ -10,8 +10,8 @@
 #include <gsl_randist.h>
 
 County::County(std::string id, std::string kernel_str) :
-    Region(id), kernel_str(kernel_str), area(0.0),
-    mt19937_generator(generate_distribution_seed())
+    Region(id), kernel_str(kernel_str), area(0.0)
+//    mt19937_generator(generate_distribution_seed())
 {
     verbose = verboseLevel;
     type = "county";
@@ -21,8 +21,8 @@ County::County(std::string id, std::string kernel_str) :
 }
 
 County::County(std::string id, double x, double y, std::string kernel_str) :
-    Region(id, x, y), kernel_str(kernel_str), area(0.0),
-    mt19937_generator(generate_distribution_seed())
+    Region(id, x, y), kernel_str(kernel_str), area(0.0)
+//    mt19937_generator(generate_distribution_seed())
 {
     type = "county";
 }
@@ -403,4 +403,3 @@ bool County::is_initialized()
 {
 	return (is_set_area and is_set_id and region_initialized);
 }
-
