@@ -1,6 +1,6 @@
 CC        =g++
-CFLAGS    =-c -std=gnu++11 -Wall -O3 -I/usr/local/Cellar/gsl/2.3/include/gsl
-LDFLAGS   =-lstdc++ -L/usr/local/Cellar/gsl/1.16/lib -lgsl -lgslcblas -lm
+CFLAGS    =-c -std=gnu++11 -Wall -O3 -I/usr/local/Cellar/gsl/1.16/include
+LDFLAGS   =-lstdc++ -L/usr/local/Cellar/gsl/1.16/lib -lgsl -lgslcblas
 INCLUDE   =-I./include/  -I/usr/local/Cellar/gsl/1.16/include/gsl
 OBJDIR    =obj/
 
@@ -9,7 +9,8 @@ OBJLIST   = Point.o Farm.o Shipment_kernel.o \
 		 	Region.o County.o State.o Grid_cell.o Grid_checker.o \
 			Grid_manager.o Status_manager.o	shared_functions.o \
 			File_manager.o main.o Control_manager.o Shipment_manager.o \
-			Local_spread.o Control_resource.o USAMM_parameters.o Population_manager.o
+			Local_spread.o Control_resource.o USAMMv2_parameters.o \
+			USAMMv3_parameters.o Diagnostic_manager.o Diagnostic_resource.o
 
 OBJECTS   = $(addprefix $(OBJDIR), $(OBJLIST) )
 

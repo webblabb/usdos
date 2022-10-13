@@ -29,7 +29,7 @@ class Grid_cell
     		double south; /// y-coordinate of lower corners of cell (same units as Farm coordinates)
     		double east; /// x-coordinate of right corners of cell (same units as Farm coordinates)
     		double west; /// x-coordinate of left corners of cell (same units as Farm coordinates)
-    		
+
     public:
 		Grid_cell(const int, const double, const double, const double, const std::vector<Farm*>);
 		~Grid_cell();
@@ -89,16 +89,16 @@ inline double Grid_cell::get_south() const {
 
 inline double Grid_cell::get_north() const {
     return north;}
-    
+
 inline double Grid_cell::get_east() const {
     return east;}
-    
+
 inline double Grid_cell::get_west() const {
     return west;}
 
 inline std::set<std::string> Grid_cell::get_counties() const {
 		return countiesIncluded;}
-		
+
 inline std::set<std::string> Grid_cell::get_states() const {
 		return statesIncluded;}
 

@@ -1,10 +1,12 @@
 #ifndef Grid_manager_h
 #define Grid_manager_h
 
+#include "Farm.h"
 #include "File_manager.h" // for parameter struct
 #include "Grid_cell.h"
 #include "shared_functions.h" //random_unique
-#include "USAMM_parameters.h"
+#include "USAMMv2_parameters.h"
+#include "USAMMv3_parameters.h"
 
 #include <algorithm> // std::sort, std::any_of, std::find
 #include <map> // std::multimap
@@ -15,7 +17,9 @@
 
 
 class County;
+struct Prem_class;
 class State;
+
 
 extern int verboseLevel;
 
@@ -29,6 +33,7 @@ class Grid_manager
 		// variables for grid creation
 		unsigned int maxFarms; ///< Threshold number of premises per cell (cell size takes precedence)
 		bool shipments_on; ///Keeps track of if shipments are turned on.
+		int usamm_version;
 
 		std::string shipment_kernel_str; ///Stores the shipment kernel type.
 		std::unordered_map<int, Grid_cell*>
@@ -41,11 +46,18 @@ class Grid_manager
         std::vector<State*> state_vector;
 		std::unordered_map<std::string, County*>
 			FIPS_map; // key is fips code, value is county object
-    std::vector<County*>
+        std::vector<County*>
             FIPS_vector;
+		// key is fips code, then species name, then sorted by population size
 		std::unordered_map<std::string,
         std::unordered_map< std::string, std::vector<Farm*> >> fipsSpeciesMap;
-			// key is fips code, then species name, then sorted by population size
+
+        std::map<std::string, Prem_class*> predefined_prem_classes; //These are the allowed prem classes, they dont necessarily need to be used.
+
+        std::map<std::string, double> wildlife_dens_map;
+        double meanWildlifeDens = 0.0; //The average across all counties where dens != 0.
+		double maxNormedWildlDens = 0.0;
+
 		std::unordered_map<std::string, std::vector<Grid_cell*>> cellsByCounty;
  		std::vector<Farm*>
  			farmList; // vector of pointers to all farms (deleted in chunks as grid is created)
@@ -59,8 +71,8 @@ class Grid_manager
 		std::unordered_map<std::string,double> infExponents; ///< Species-specific infectiousness exponents, in same order as speciesOnAllFarms
 		std::unordered_map<std::string,double> susValues; ///< Species-specific susceptibility values, in same order as speciesOnAllFarms
 		std::unordered_map<std::string,double> infValues; ///< Species-specific infectiousness values, in same order as speciesOnAllFarms
-		std::unordered_map<std::string,double> normInf; ///< Normalized species-specific infectiousness values, in same order as speciesOnAllFarms
-		std::unordered_map<std::string,double> normSus; ///< Normalized species-specific susceptibility values, in same order as speciesOnAllFarms
+		std::unordered_map<std::string,std::vector<double>> normInf; ///< Normalized species-specific infectiousness values, in same order as speciesOnAllFarms. One value per quarter.
+		std::unordered_map<std::string,std::vector<double>> normSus; ///< Normalized species-specific susceptibility values, in same order as speciesOnAllFarms. One value per quarter.
 		Local_spread* kernel;
 
 		unsigned int committedFarms; ///< Used to double-check that all loaded premises were committed to a cell
@@ -72,28 +84,49 @@ class Grid_manager
 		size_t days_in_period = 0;
 		size_t USAMM_current_year = 1;
 		std::string USAMM_temporal_name;
-		std::map<Farm_type*, USAMM_parameters> usamm_parameters;
+		std::map<Farm_type*, USAMMv2_parameters> usammv2_parameters;
+		std::vector<USAMMv3_parameters> usammv3_parameters;
 		std::unordered_map<std::string, Farm_type*> farm_types_by_herd;
 		std::unordered_map<std::string, Farm_type*> farm_types_by_name;
 		std::vector<Farm_type*> farm_types_vec;
+		std::map<Farm_type*, std::set<Prem_class*>> prem_classes_by_ft; //Farm, feedlot, market.
+		std::unordered_map<Farm_type*, double> avg_farm_sizes; //USAMMv2
+		std::unordered_map<Farm_type*, double> avg_feedl_sizes; //USAMMv2
+		std::unordered_map<Farm_type*, double> avg_mkt_sizes; //USAMMv2
+		std::map<std::string, std::map<Prem_class*, double>> avg_prem_sizes; //Used for USAMMv3
+		std::map<std::string, std::map<std::string, double>>  btb_animal_slaughter_prop;
+		std::map<std::string, std::map<std::string, std::vector<std::vector<double>>>> btb_shipment_slaughter_prop;
+		std::map<int, std::vector<double>> btb_sl_facility_alpha_beta_map;
+		std::vector<int> btb_slaughtershed_facility_ids;
+		std::map<int, std::vector<double>> btb_slaughtershed_probabilities; //By county fips as key.
 
 		// functions
 		///Reads counties and states from file specified in config #18.
 		void readFips_and_states();
+		/// Calculates the average premises size of every type (farm, feedl, market * beef, dairy) and saves it in the GM and each county obj.
+		void calc_avg_prem_sizes();
 		///Does all the reading of premises-file (FLAPS) specified in config #11
 		void readFarms(const std::string& farm_fname);
+		///Reads in the file required for determining the number of shipments and animals sent to slaughter. Only required for bTB simulations with diagnostics.
+		void initSlaughterProportions();
+		///Reads the file required for determineing the destination facility of slaughter shipments and the probabilities of detecting lesions.
+		void initSlaughterShed();
 		///Sets the covariates of the counties.
 		void initFipsCovariatesAndCounties();
+		///Keeps track of the current USAMM time period (ie. which quarter or month) and updates it
+		///in necessary. Returns a flag indicating if USAMM parameters need to be updated to
+		///match a new period.
+		bool updateUSAMMTimePeriod(int t, int day_of_year);
 		///Calculates the county-level shipping probabilities based on the
 		///current state-level parameters and
 		///nation-level covariate parameters given the time period.
-		void updateFipsShipping(std::string time_period);
+		void updateCountyShipping(std::string time_period, bool reset=false);
 		///Updates the shipment rate for the states using new farm and county covariate weights
 		///as well as the latest lambda_null.
 		void updateStateLambdas();
 		///Update all the states with new shipping parameters (std, kurtosis, N and s)
 		///for the given time period.
-		void updateStatesShipping(std::string time_period, size_t days_in_period, size_t days_rem, bool reset);
+		void updateStatesShipping(std::string time_period, size_t days_in_period, size_t days_rem, bool reset=false);
 		void set_maxFarms(unsigned int in_maxFarms); //inlined
 		std::string to_string(Grid_cell&) const;
 		std::vector<Farm*> getFarms(
@@ -164,8 +197,9 @@ class Grid_manager
         std::vector<Farm*>& get_allFarms_vector(); //Inlined
 
 		const std::unordered_map<std::string, County*>*
-			get_allCounties() const; //inlined
+			get_allCountiesMap() const; //inlined
 
+        const std::vector<County*> get_allCountiesVec() { return FIPS_vector; }
 		const std::unordered_map<std::string, State*>*
 			get_allStates() const; //inlined
 
@@ -181,23 +215,35 @@ class Grid_manager
 			std::vector<std::string>&, bool, std::vector<Grid_cell*>&);
 		int get_parentCell(double, double, std::string);
 
-        ///Constructs the USAMM_parameters objects and assigns shipping parameters
+		void updateQuarterlyFarmSizes(int quarter_idx);
+
+        ///Constructs the USAMMv2_parameters objects and assigns shipping parameters
         ///to states and covariates to counties.
-        void initShippingParameters(int t, int start_day_in);
+        void initShippingParametersUSAMMv2(int t, int start_day_in);
+
+        ///Constructs the USAMMv3_parameters objects and assigns shipping parameters
+        ///to states and covariates to counties.
+        void initShippingParametersUSAMMv3(int t, int start_day_in);
+
         ///Checks to see if a transition has been made from one time period to the next
         ///since the last time step (eg. Q1 -> Q2) and updates all the USAMM parameters
         ///if necessary. This function must be called each timestep of the simulation.
-		void updateShippingParameters(int t, bool restart = false);
-		///Interface to get the USAMM .res file line that the farm-type
-		///specific USAMM_parameter object has loaded.
-		std::string get_generation_string(Farm_type* ft);
+		void updateShippingParameters(int t, int day_of_year, bool restart = false);
 
+		std::vector<USAMMv3_parameters>& get_usammv3_parameters_vec() { return usammv3_parameters; };
+
+		///Interface to get the USAMM .res file line that the farm-type
+		///specific USAMM_parameter object has loaded. Common for bothe USAMMv2 & v3.
+		std::string get_generation_string(Farm_type* ft);
         ///Sums the origin shipping weight for all counties within a state and normalizes
         ///each countys weight with this norm so that they sum to 1 within a given state.
         ///Does this for each state.
-		void normalizeShippingWeights();
+		void normalizeShippingWeightsUSAMMv2();
 		///Return the current time period that the simulatin is currently in.
+
+
 		std::string get_time_period();
+		int get_temporal_index();
 		///Returns the number of days in the current period.
 		size_t get_days_in_period();
 		///Returns the remaining number of days in the current period.
@@ -205,10 +251,19 @@ class Grid_manager
 
         Farm_type* get_farm_type_by_herd(std::string herd); //Returns pointer to type based on what species are present on a farm.
 		Farm_type* get_farm_type_by_name(std::string name);
-		std::vector<Farm_type*> get_farm_types();
+		std::vector<Farm_type*> get_farm_types() { return farm_types_vec; }
+		Prem_class* get_prem_class(std::string class_str, Farm_type* ft);
+		std::map<Farm_type*, std::set<Prem_class*>> get_prem_classes_by_type() { return prem_classes_by_ft; }
+		std::set<Prem_class*> get_prem_classes_by_type(Farm_type* ft) { return prem_classes_by_ft.at(ft); }
 
-        const std::unordered_map<std::string, double>& get_normInf_map() const;
-        const std::unordered_map<std::string, double>& get_normSus_map() const;
+        const std::unordered_map<std::string, std::vector<double>>& get_normInf_map() const;
+        const std::unordered_map<std::string, std::vector<double>>& get_normSus_map() const;
+
+        double get_slaughter_shipment_factor(std::string species, std::string prem_class, int prem_size);
+        double get_slaughter_fraction(std::string species, std::string prem_class);
+        const std::vector<double>& get_slaughtershed_probabilities(int fips_code) { return btb_slaughtershed_probabilities.at(fips_code); };
+        const std::vector<int>& get_slaughter_facility_ids() { return btb_slaughtershed_facility_ids; }
+        const std::vector<double>& get_slaughter_facility_alpha_beta(int facility_id) { return btb_sl_facility_alpha_beta_map.at(facility_id); }
 };
 
 /// "Compare" function to sort farms by x-coordinate,
@@ -241,7 +296,7 @@ inline std::vector<Farm*>& Grid_manager::get_allFarms_vector()
 }
 
 inline const std::unordered_map<std::string, County*>*
-	Grid_manager::get_allCounties() const
+	Grid_manager::get_allCountiesMap() const
 {
 	return &FIPS_map;
 }
@@ -273,11 +328,14 @@ template<typename T> std::vector<T> orderNumbers(T& number1, T& number2)
 /// Sorts farms by population for a given species/type
 struct comparePop
 {
-	comparePop(std::string in_species) : species(in_species) {}
+	comparePop(Farm_type* ft) :
+	    ft(ft), species(ft->get_species()) {}
 	bool operator() (const Farm* farm1, const Farm* farm2){
-		return (farm1->Farm::get_size(species)) < (farm2->Farm::get_size(species));
+		return (farm1->Farm::get_size_current_quarter(ft) <
+                farm2->Farm::get_size_current_quarter(ft));
 	}
 	private:
+	    Farm_type* ft;
 		std::string species;
 };
 

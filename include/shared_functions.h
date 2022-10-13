@@ -11,16 +11,26 @@
 #include <iostream> // for troubleshooting output
 #include <sstream>
 #include <unordered_map>
+#include <gsl/gsl_rng.h>
+#include "gsl/gsl_randist.h"
+
 
 #include "Farm.h"
 
+    //Shared functions
 	double uniform_rand(); ///< Uniform distribution random number generator
-	double normal_rand(); ///< Normal distribution random number generator
 	int rand_int(int lo, int hi); ///< Uniform integer distribution rng.
+	double draw_norm(double mean, double stdev); ///< Draw a random number from a normal distribution with specified mean and standard deviation.
 	int draw_binom(int, double); ///< Draw number of successes from a binomial distribution
 	int draw_poisson(double lambda); ///<Generate a random number from a poisson dist. with given rate.
+	double draw_gamma(double shape, double scale); ///<Generate a random number from a gamma distribution with parameters shape and scale.
+	void draw_multinomial(int n, const std::vector<double>& weights, std::vector<unsigned int>& outcome); ///<Generate a random sample from a multinomial distribution and save to outcome.
+	void draw_multivariate_hypergeometric(int n, const std::vector<unsigned int>& bins, std::vector<unsigned int>& outcome); ///<Generate a sample from a multivariate hypergeometric distribution with a vector describing the number of objects in each bin. Same as multinomial but without replacement.
+	double draw_beta(double alpha, double beta); ///<Generate a random number from a beta distribution.
 	unsigned int generate_distribution_seed(); ///<Generates a number that can be used in a random number generator based on the current time.
 	size_t get_day_of_year(size_t current_timestep, size_t start_day); ///<Given the current time step and the start day of the simulation, returns the current day of the year.
+	size_t get_month_of_year(size_t day_of_year);
+	int get_quarter(size_t current_day_of_year);
 	double oneMinusExp(double); ///< Calculates \f$1 - e^x\f$ using a two-term Taylor approximation for x<1e-5
  	int normDelay(std::tuple<double, double>&); ///< Return a period of time, drawn from a normal distribution
 	std::vector<std::string>
@@ -40,6 +50,10 @@
 	void addItemTab(std::string&, std::string); ///< Overloaded version adds tab after a string
 	void printLine(std::string&, std::string&); ///< Generic print function used by a variety of output files
 	unsigned int get_n_lines(std::ifstream& f); ///< Counts and returns the number of lines in a file.
+    int read_table(std::string fname, char delim,bool header,
+                   std::vector<std::vector<std::string>>& out,
+                   char comment_char='#');
+	std::string trim(const std::string &s); //Removes whitespace around string.
 
 template<typename T>
 T stringToNum(const std::string& text)

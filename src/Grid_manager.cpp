@@ -1,4 +1,3 @@
-// included in Grid_manager.h: algorithm, queue, stack, unordered_map, vector
 #include <cmath> // std::sqrt
 #include <fstream>
 #include <iostream>
@@ -35,9 +34,20 @@ Grid_manager::Grid_manager(const Parameters* p)
 	FIPS_map.reserve(3200);
 	FIPS_vector.reserve(3200);
 
+	//Set up the predefined prem classes.
+    predefined_prem_classes["Frm"] = new Prem_class("Frm", 0);
+    predefined_prem_classes["Mkt"] = new Prem_class("Mkt", 1);
+    predefined_prem_classes["Fdl"] = new Prem_class("Fdl", 2);
+
     // Determine if shipping is turned off in parameters
 	shipments_on = p->shipments_on;
+	usamm_version = p->usamm_version;
+	if(usamm_version == 3)
+    {
+        USAMMv3_parameters::clear_size_bins();
+    }
 	shipment_kernel_str = p->shipment_kernel;
+
     readFarms(parameters->premFile); // read Farms, make Counties
 
 	if (!shipments_on){
@@ -48,6 +58,13 @@ Grid_manager::Grid_manager(const Parameters* p)
         }
 	}
     readFips_and_states(); // read centroids, areas, state codes, make states
+    calc_avg_prem_sizes(); // Calculates the average premises size of every type (farm, feedl, market * beef, dairy) and saves it in the GM and each county obj.
+
+    if(parameters->infectionType == InfectionType::BTB and parameters->diagnostic_on ==true)
+    {
+        initSlaughterProportions();
+        initSlaughterShed();
+    }
 
 if (verbose>1){
 	std::cout << "x min = " << std::get<0>(xylimits) << std::endl;
@@ -61,30 +78,55 @@ if (verbose>1){
 
 Grid_manager::~Grid_manager()
 {
-  for (auto s : state_map){delete s.second;}
-  for (auto c : FIPS_map){delete c.second;}
-  for (auto f : farm_map){delete f.second;}
-	for (auto gc : allCells){delete gc.second;}
-	for (auto ft : farm_types_by_herd){delete ft.second;}
+    for (auto s : state_map) { delete s.second; }
+    for (auto c : FIPS_map) { delete c.second; }
+    for (auto f : farm_map) { delete f.second; }
+    for (auto gc : allCells) { delete gc.second; }
+    for (auto ft : farm_types_by_herd) { delete ft.second; }
+    for (auto pcl_pair : predefined_prem_classes) { delete pcl_pair.second; }
 }
 
+void Grid_manager::updateQuarterlyFarmSizes(int quarter_idx)
+{
+    Farm::update_current_quarter_idx(quarter_idx);
+}
 
-void Grid_manager::initShippingParameters(int t, int start_day_in)
+void Grid_manager::initShippingParametersUSAMMv2(int t, int start_day_in)
 {
     //Reads new shipping parameters and updates all state and county specific
     //variables accordingly. Also resets N_todo in states if using usamm v1 parameters.
     start_day = start_day_in;
-    usamm_parameters.clear();
+    usammv2_parameters.clear();
     for(size_t i = 0; i < parameters->species.size(); i++)
     {
         std::string this_species = parameters->species.at(i);
         Farm_type* this_ft = farm_types_by_name.at(this_species);
-        USAMM_parameters up(parameters, this_ft);
-        usamm_parameters[this_ft] = up;
+        USAMMv2_parameters up(parameters, this_ft);
+        usammv2_parameters[this_ft] = up;
     }
     initFipsCovariatesAndCounties();
-    updateShippingParameters(t, true);
+    updateShippingParameters(t, start_day, true);
 }
+
+void Grid_manager::initShippingParametersUSAMMv3(int t, int start_day_in)
+{
+    //Reads new shipping parameters and updates all state and county specific
+    //variables accordingly.
+    start_day = start_day_in;
+    usammv3_parameters.clear();
+    usammv3_parameters.reserve(farm_types_vec.size()*4);
+    for(Farm_type* this_ft : farm_types_vec)
+    {
+        usammv3_parameters.emplace_back(USAMMv3_parameters(parameters, this_ft, prem_classes_by_ft.at(this_ft),
+                                                           avg_prem_sizes.at(this_ft->get_species())));
+//        USAMMv3_parameters up(parameters, this_ft, prem_classes_by_ft.at(this_ft),
+//                              avg_prem_sizes.at(this_ft->get_species()));
+//        usammv3_parameters[this_ft->get_index()] = up;
+    }
+    initFipsCovariatesAndCounties();
+    updateShippingParameters(t, start_day, true);
+}
+
 
 void Grid_manager::readFips_and_states()
 {
@@ -109,9 +151,9 @@ void Grid_manager::readFips_and_states()
                 {
                     int_fips = 46102;
                 }
-                std::string fips = std::to_string(int_fips);
-
-                int state_code = stringToNum<int>(line_vector[2].substr(0,2));
+                std::string fips = std::to_string(int_fips); //To get rid of zeros in the beginning, e.g. 01003.
+                int n_chars = line_vector[2].size() - 3; //Some counties have 4, and some have 5 characters. The state code is always all the characters up to, not including, the 3rd character from the back.
+                int state_code = stringToNum<int>(line_vector[2].substr(0, n_chars));
                 double area = stringToNum<double>(line_vector[3]);
                 double x = stringToNum<double>(line_vector[4]);
                 double y = stringToNum<double>(line_vector[5]);
@@ -146,6 +188,67 @@ void Grid_manager::readFips_and_states()
         exit(EXIT_FAILURE);
     }
 
+
+    if(parameters->infectionType == InfectionType::BTB)
+    {
+        double wildlife_dens_sum = 0.0; //For calculating mean.
+        double n_not_zero = 0.0;
+        std::ifstream w(parameters->btb_wildlife_density_file);
+        if(w.is_open()) {
+            skipBOM(w);
+            std::string header_line;
+            getline(w, header_line); // get line from file "w", save as "line"
+            while(!w.eof()) {
+                std::string line;
+                getline(w, line); // get line from file "w", save as "line"
+                std::vector<std::string> line_vector = split(line, '\t'); // separate by tabs
+
+                if(! line_vector.empty()) // if line_vector has something in it
+                {
+                    int int_fips = std::stoi(line_vector[0]);
+                    std::string str_fips = std::to_string(int_fips);
+                    double dens = std::stod(line_vector[1]);
+                    wildlife_dens_map[str_fips] = dens;
+                    wildlife_dens_sum += dens;
+                    if(dens > 0.0)
+                    {
+                        n_not_zero += 1.0;
+                    }
+                }
+            }
+            w.close();
+        }
+        else
+        {
+            std::cout << "Failed to open wildlife density file " << parameters->btb_wildlife_density_file << "." << std::endl;
+            exit(EXIT_FAILURE);
+        }
+
+        //Normalize wildlife densities to be w_n = w / mean(W) (where mean(W) is average across all counties where dens != 0)
+        meanWildlifeDens = wildlife_dens_sum / n_not_zero;
+        for(County* c : FIPS_vector)
+        {
+            std::string str_fips = c->get_id();
+            double dens;
+            if(wildlife_dens_map.find(str_fips) != wildlife_dens_map.end())
+            {
+                dens = wildlife_dens_map[str_fips];
+            }
+            else
+            {
+                std::cout << "County " << str_fips << " was not found in the wildlife density input file. "
+                          << "Setting wildlife density for that county to 0.0." << std::endl;
+                dens = 0.0;
+            }
+            double normed_dens = dens / meanWildlifeDens;
+            c->set_wildlife_density(normed_dens);
+            if(normed_dens > maxNormedWildlDens)
+            {
+                maxNormedWildlDens = normed_dens;
+            }
+        }
+    }
+
   n_counties_loaded = FIPS_map.size();
 
   std::clock_t fips_load_end = std::clock();
@@ -154,6 +257,61 @@ void Grid_manager::readFips_and_states()
               1000.0 * (fips_load_end - fips_load_start) / CLOCKS_PER_SEC <<
               "ms." << std::endl;
   }
+}
+
+void Grid_manager::calc_avg_prem_sizes()
+{
+    for(Farm_type* ft : farm_types_vec)
+    {
+        double farm_vol = 0.0;
+        double farm_n = 0.0;
+        double feedl_vol = 0.0;
+        double feedl_n = 0.0;
+        double mkt_vol = 0.0;
+        double mkt_n = 0.0;
+        for(County* c : FIPS_vector)
+        {
+            farm_vol += c->get_total_farm_vol(ft);
+            farm_n += c->get_n_farms(ft);
+            feedl_vol += c->get_total_feedl_vol(ft);
+            feedl_n += c->get_n_feedl(ft);
+            mkt_vol += c->get_total_mkt_vol();
+            mkt_n += c->get_n_mkt();
+        }
+        avg_farm_sizes[ft] = farm_vol / farm_n;
+        avg_feedl_sizes[ft] = feedl_vol / feedl_n;
+        avg_mkt_sizes[ft] = mkt_vol / mkt_n;
+
+        for(County* c : FIPS_vector)
+        {
+            c->set_national_avg_farm_vol(ft, avg_farm_sizes.at(ft));
+            c->set_national_avg_feedl_vol(ft, avg_feedl_sizes.at(ft));
+            c->set_national_avg_mkt_vol(ft, avg_mkt_sizes.at(ft));
+        }
+    }
+    for(Farm* m : farmList)
+    {
+        //Go through the markets and assign coordinates from a random prem in same county.
+        if(m->is_market())
+        {
+            County* market_county = m->get_parent_county();
+            std::vector<Farm*> county_prems = market_county->get_premises();
+            if(county_prems.size() > 2) //Only if there is anything other than markets in the county.
+            {
+                Farm* farm_ptr = m;
+                while(farm_ptr->is_market()) //Draw again if the picked prem is the same as the market.
+                {
+                    farm_ptr = randomFrom(county_prems);
+                }
+                m->set_xy(farm_ptr->get_x(), farm_ptr->get_y());
+            }
+            else //Otherwise set market coords to county centroid.
+            {
+                const Point* p = market_county->get_centroid();
+                m->set_xy(p->x, p->y);
+            }
+        }
+    }
 }
 
 void Grid_manager::readFarms(const std::string& farm_fname)
@@ -166,16 +324,20 @@ void Grid_manager::readFarms(const std::string& farm_fname)
 	double x, y;
 	std::string fips;
 	int fcount = 0;
-	std::unordered_map<std::string,double> sumSp; ///> Total count of each species
-	std::unordered_map<std::string,double> sumP; ///> Sum of (species count on premises^p), over all premises
-	std::unordered_map<std::string,double> sumQ; ///> Sum of (species count on premises^q), over all premises
+	std::unordered_map<std::string, std::vector<double>> sumSp; ///> Total count of each species. By quarter.
+	std::unordered_map<std::string, std::vector<double>> sumP; ///> Sum of (species count on premises^p), over all premises. By quarter.
+	std::unordered_map<std::string, std::vector<double>> sumQ; ///> Sum of (species count on premises^q), over all premises. By quarter.
 
 	// initialize each species sum to 0
 	for (std::string s:speciesOnPrems){
-		sumSp[s] = 0.0;
-		sumP[s] = 0.0;
-		sumQ[s] = 0.0;
+		sumSp[s] = { 0.0, 0.0, 0.0, 0.0 };
+		sumP[s] = { 0.0, 0.0, 0.0, 0.0 };
+		sumQ[s] = { 0.0, 0.0, 0.0, 0.0 };
 	}
+
+	//These are just for calculating avg premises size for USAMMv3.
+	std::map<Farm_type*, std::map<Prem_class*, int>> prem_counts;
+	std::map<Farm_type*, std::map<Prem_class*, int>> prem_sizes;
 
 	std::ifstream f(parameters->premFile);
 	if(!f){std::cout << "Premises file not found. Exiting..." << std::endl; exit(EXIT_FAILURE);}
@@ -183,157 +345,275 @@ void Grid_manager::readFarms(const std::string& farm_fname)
 	{
 	    skipBOM(f);
         if (verbose>0){std::cout << "Premises file open, loading premises." << std::endl;}
-
+        std::string header;
+        getline(f, header); //Not used for anything other than checking number of columns.
+        std::vector<std::string> header_v = split(header, '\t');
+        unsigned int colcount = header_v.size(); //If its == 9, then it's an old FLAPS file with yearly animal estimates, if it's == 15, then there are quarterly estimates for beef and dairy.
+		if(colcount != 9 and colcount != 15)
+        {
+            std::cout << "The number of columns in the FLAPS file (" << colcount << ") is wrong. Must be either "
+                      << "9 or 15:" << std::endl
+                      << "\tId County_fips X Y lat lon type b_YEAR d_YEAR" << std::endl
+                      << "\tId County_fips X Y lat lon type b_Q1 b_Q2 b_Q3 b_Q4 d_Q1 d_Q2 d_Q3 d_Q4" << std::endl;
+            exit(EXIT_FAILURE);
+        }
 		while(! f.eof())
 		{
 			std::string line;
 			getline(f, line); // get line from file "f", save as "line"
 			std::vector<std::string> line_vector = split(line, '\t'); // separate by tabs
 
-			if(! line_vector.empty()) // if line_vector has something in it
-			{
-				id = stringToNum<int>(line_vector[0]);
-				//Convert string to int, and then back again in order to remove any zeros in the beginning.
-				int int_fips = stringToNum<int>(line_vector[1]);
-				if(int_fips == 46113) //Shannon county (46113) changed to Oglala, 46102.
+            if(! line_vector.empty()) // if line_vector has something in it
+            {
+                id = stringToNum<int>(line_vector[0]);
+                //Convert string to int, and then back again in order to remove any zeros in the beginning.
+                int int_fips = stringToNum<int>(line_vector[1]);
+                if(int_fips == 46113) //Shannon county (46113) changed to Oglala, 46102.
                 {
                     int_fips = 46102;
                 }
-				fips = std::to_string(int_fips);
+                fips = std::to_string(int_fips);
 
-				if (parameters->reverseXY){ // file is formatted as: lat, then long (y, then x)
-					y = stringToNum<double>(line_vector[2]);
-					x = stringToNum<double>(line_vector[3]);
-				} else if (!parameters->reverseXY){ // file is formatted as: long, then lat (x, then y)
-					x = stringToNum<double>(line_vector[2]);
-					y = stringToNum<double>(line_vector[3]);
-				}
-
-				// add species counts - check that number of columns is as expected
-				if (line_vector.size() < 4+speciesOnPrems.size()){
-					std::cout<<"ERROR (premises file & config 44-46) at line"<<std::endl;
-					std::cout<< line <<std::endl;
-					std::cout<< ": number of columns with animal populations don't match up with list of species provided."<<std::endl;
-					std::cout<<"Exiting..."<<std::endl;
-					exit(EXIT_FAILURE);
-				}
-
-				unsigned int colcount = 4; // animal populations start at column 4
-				unsigned int total_animals = 0;
-				std::vector<int> animal_numbers;
-				for(size_t i = colcount; i < line_vector.size(); i++)
+                // If county doesn't exist, create it
+                if (FIPS_map.count(fips) == 0)
                 {
-                    unsigned int tempsize = stringToNum<int>(line_vector[i]);
-                    total_animals += tempsize;
+                    County* new_county = new County(fips, shipment_kernel_str);
+                    FIPS_map[fips] = new_county;
+                    FIPS_vector.emplace_back(new_county);
+                }
+
+                if (parameters->reverseXY)  // file is formatted as: lat, then long (y, then x)
+                {
+                    y = stringToNum<double>(line_vector[2]);
+                    x = stringToNum<double>(line_vector[3]);
+                }
+                else if (!parameters->reverseXY)    // file is formatted as: long, then lat (x, then y)
+                {
+                    x = stringToNum<double>(line_vector[2]);
+                    y = stringToNum<double>(line_vector[3]);
+                }
+
+                // add species counts
+                //If this is a market, translate the yearly volume estimate in the FLAPS file to weekly average:
+                double animal_n_factor = 1.0;
+                if (line_vector[6] == "m")
+                {
+                    animal_n_factor = 1.0 / 52.0;
+                }
+                std::vector<int> animal_numbers;
+                animal_numbers.reserve(10);
+                for(size_t i = 7; i < line_vector.size(); i++) //Animal numbers always start on col 7, regardless of qurterly estimates or not.
+                {
+                    int tempsize = int(stringToNum<double>(line_vector[i]) * animal_n_factor + 0.5);
+//                    total_animals += tempsize;
                     animal_numbers.push_back(tempsize);
                 }
 
-                if(total_animals < 1)
+                // write farm pointer to private var farm_map
+                Farm* farm_ptr = new Farm(id, x, y, fips, parameters);
+                farm_map[id] = farm_ptr;
+                farm_vector.push_back(farm_ptr);
+                ++fcount;
+
+                //This many size estimates / species.
+                int cols_per_species = 1;
+                if(colcount == 15)
+                {
+                    cols_per_species = 4;
+                }
+
+                unsigned int size_for_USAMMv3 = 0;
+                unsigned int total_n_animals = 0;
+                std::string herd(speciesOnPrems.size(), '0');
+                for (size_t i = 0; i < speciesOnPrems.size(); i++)  // for each species
+                {
+                    std::string sp = speciesOnPrems[i]; //Name of this species
+                    int sp_start_idx = i*cols_per_species;
+                    std::vector<int> tempv;
+                    tempv.reserve(4);
+                    unsigned int total_n_sp = 0;
+                    if(colcount == 15)
+                    {
+                        tempv.assign(animal_numbers.begin() + sp_start_idx,
+                                     animal_numbers.begin() + sp_start_idx + cols_per_species);
+
+                    }
+                    else
+                    {
+                        tempv.resize(4, animal_numbers[sp_start_idx]);
+                    }
+                    size_for_USAMMv3 += tempv[2]; //Use quarter 3 for usamm.
+                    total_n_sp = std::accumulate(tempv.begin(), tempv.end(), 0);
+                    total_n_animals += total_n_sp;
+
+                    farm_ptr->set_quarterlySpeciesCounts(i, sp, tempv);// set number for species at premises
+
+                    double p = infExponents.at(sp);
+                    double q = susExponents.at(sp);
+                    for(size_t j=0; j<tempv.size(); ++j)
+                    {
+                        sumSp[sp][j] += tempv[j];
+                        sumP[sp][j] += pow(double(tempv[j]), p);
+                        sumQ[sp][j] += pow(double(tempv[j]), q);
+                    }
+
+                    // if there are animals of this species, add to fips-species list to sort by population later
+                    if(total_n_sp > 0 )
+                    {
+                        fipsSpeciesMap[fips][sp].emplace_back(farm_ptr);
+                        herd[i] = '1';
+                    }
+                }
+
+                if(total_n_animals < 1)
                 {
                     if(verbose>1)
                     {
                         std::cout << "Warning: Premises with id " << id << " has no animals of any species. "
                                   << "Skipping this farm..." << std::endl;
                     }
-					continue;
+                    continue;
                 }
 
-				// write farm pointer to private var farm_map
-				farm_map[id] = new Farm(id, x, y, fips);
-				farm_vector.push_back(farm_map.at(id));
-				++fcount;
-
-                std::string herd(speciesOnPrems.size(), '0');
-				for (size_t i = 0; i < speciesOnPrems.size(); i++){ // for each species
-					std::string sp = speciesOnPrems[i]; //Name of this species
-					unsigned int number = animal_numbers[i]; //Number of individuals of this species/type
-					farm_map.at(id)->set_speciesCount(sp, number);// set number for species at premises
-					sumSp[sp] += number;
-					// get infectiousness ("p") for this species
-					double p = infExponents.at(sp);
-					sumP[sp] += pow(double(number),p);
-					// get susceptibility ("q") for this species
-					double q = susExponents.at(sp);
-					sumQ[sp] += pow(double(number),q);
-
-					// if there are animals of this species, add to fips-species list to sort by population later
-					if (number > 0){
-						fipsSpeciesMap[fips][sp].emplace_back(farm_map.at(id));
-						herd[i] = '1';
-					}
-				}
-
-				//Assign the correct farm type to the farm.
+                //Assign the correct farm type to the farm.
                 Farm_type* farm_type = get_farm_type_by_herd(herd);
-                farm_map.at(id)->set_farm_type(farm_type);
+                farm_ptr->set_farm_type(farm_type);
+                Prem_class* prem_class  = get_prem_class(line_vector[6], farm_type);
+                farm_ptr->set_prem_class(prem_class);
+                //Add the number of animals used by the USAMMv3 shipment generation process to the Farm object.
+                farm_ptr->set_USAMMv3_size(size_for_USAMMv3);
+                int binned_premsize = USAMMv3_parameters::farmSizeBinningFun(size_for_USAMMv3, farm_type, prem_class);
+                farm_ptr->set_USAMMv3_binned_size(binned_premsize);
 
-// At this point, fixed data pertaining to the farm (coordinates, numbers, types) should
-// be final - farm will be copied into other locations (maps by counties)
-
-				// If county doesn't exist, create it
-				if (FIPS_map.count(fips) == 0){
-                    County* new_county = new County(fips, shipment_kernel_str);
-			    	FIPS_map[fips] = new_county;
-			    	FIPS_vector.emplace_back(new_county);
+                if(prem_counts[farm_type].find(prem_class) ==
+                   prem_counts[farm_type].end())
+                {
+                    prem_counts[farm_type][prem_class] = 0;
+                    prem_sizes[farm_type][prem_class] = 0; //If one doesn't exist, the other won't exist either.
                 }
+                ++prem_counts[farm_type][prem_class];
+                prem_sizes[farm_type][prem_class] += binned_premsize;
 
-				// Add farm to its corresponding county object
-				try{
-					FIPS_map.at(fips)->County::add_farm(farm_map.at(id));
-				}
-				catch(std::exception& e){
-					std::cout << "When adding premises " << id << " to county " << fips << "." <<
-							  e.what() << std::endl;
-					exit(EXIT_FAILURE);
- 				}
+                // compare/replace limits of xy plane
+                if (fcount>1) // if this is not the first farm
+                {
+                    if (x < std::get<0>(xylimits))
+                    {
+                        std::get<0>(xylimits) = x;   // x min
+                    }
+                    else if (x > std::get<1>(xylimits))
+                    {
+                        std::get<1>(xylimits) = x;   // x max
+                    }
 
-
-				// compare/replace limits of xy plane
-				if (fcount>1){// if this is not the first farm
-					if (x < std::get<0>(xylimits)){std::get<0>(xylimits) = x;} // x min
-					else if (x > std::get<1>(xylimits)){std::get<1>(xylimits) = x;} // x max
-
-					if (y < std::get<2>(xylimits)){std::get<2>(xylimits) = y;} // y min
-					else if (y > std::get<3>(xylimits)){std::get<3>(xylimits) = y;} // y max
-					}
-				else {
-if (verbose>1){std::cout << "Initializing xy limits.";}
-					xylimits = std::make_tuple(x,x,y,y);
-					// initialize min & max x value, min & max y value
+                    if (y < std::get<2>(xylimits))
+                    {
+                        std::get<2>(xylimits) = y;   // y min
+                    }
+                    else if (y > std::get<3>(xylimits))
+                    {
+                        std::get<3>(xylimits) = y;   // y max
+                    }
                 }
-
-			} // close "if line_vector not empty"
+                else
+                {
+                    if (verbose>1)
+                    {
+                        std::cout << "Initializing xy limits.";
+                    }
+                    xylimits = std::make_tuple(x,x,y,y);
+                    // initialize min & max x value, min & max y value
+                }
+            } // close "if line_vector not empty"
 		} // close "while not end of file"
 		f.close();
 	} // close "if file is open"
 
+	//Force the addition of the "Mkt" prem class to dairy as well. This solution is not elegant
+	//and generates a warning (unused variable), but I haven't come up with a good way to,
+	//treat the markets as premises that belong to both the beef and dairy shipment network.
+	for(Farm_type* ft : farm_types_vec)
+    {
+        Prem_class* dummy_class = get_prem_class("m", ft);
+    }
+
+	//Calculate average prem size by prem class and farm type and normalize the
+	//premises' sizes by this for use with USAMMv3.
+	for(Farm_type* ft : farm_types_vec)
+    {
+        for(Prem_class* pcl : prem_classes_by_ft.at(ft))
+        {
+            if(prem_sizes[ft].find(pcl) != prem_sizes[ft].end())
+            {
+                avg_prem_sizes[ft->get_species()][pcl] = double(prem_sizes.at(ft).at(pcl)) /
+                                                         double(prem_counts.at(ft).at(pcl));
+            }
+            else
+            {
+                avg_prem_sizes[ft->get_species()][pcl] = 0.0;
+            }
+        }
+    }
+
+    //This needs to be done because beef and dairy has their own lists of which prem-classes
+    //are relevant. And since markets are only read in as beef prems, the avg size for them
+    //needs to be copied over to the dairy list for average sizes after it's been calculated
+    //for beef. A bit inelegant, but I haven't been able to come up with a better solution. /S
+    if(avg_prem_sizes.find("dairy") != avg_prem_sizes.end())
+    {
+        Prem_class* mkt_pcl = predefined_prem_classes.at("Mkt");
+        avg_prem_sizes.at("dairy").at(mkt_pcl) = avg_prem_sizes.at("beef").at(mkt_pcl);
+    }
+
     // copy farmlist from farm_map (will be changed as grid is created)
     if (verbose>1){std::cout << "Copying farms from farm_map to farmList..." << std::endl;}
-	for (auto& prem: farm_map) {farmList.emplace_back(prem.second);} // "second" value from map is Farm pointer
+	for (auto& prem: farm_map)
+    {
+        Farm* this_prem = prem.second;
+        farmList.emplace_back(this_prem);
+        // At this point, fixed data pertaining to the farm (coordinates, numbers, types) should
+        // be final - farm will be copied into other locations (maps by counties)
+        // Add farm to its corresponding county object
+        try
+        {
+            std::string fips = this_prem->get_fips();
+            FIPS_map.at(fips)->County::add_premises(this_prem, farm_types_vec, prem_classes_by_ft);
+        }
+        catch(std::exception& e)
+        {
+            std::cout << "When adding premises " << this_prem->get_id() << " to county " << fips << "." <<
+                      e.what() << std::endl;
+            exit(EXIT_FAILURE);
+        }
+    } // "second" value from map is Farm pointer
 
 	// sort farmList by ID for faster matching/subset removal
 	std::sort(farmList.begin(),farmList.end(),sortByID<Farm*>);
 	// sort within each FIPS map element by farm size (population) for each species
 	// (for use in Shipment manager, but this pre-calculates to save run time)
-	for (auto& sp:speciesOnPrems){
-		std::sort(fipsSpeciesMap[fips][sp].begin(),fipsSpeciesMap[fips][sp].end(),comparePop(sp)); // comparePop struct defined in Grid_manager.h
+	for (Farm_type* ft : farm_types_vec){
+            std::string sp = ft->get_species();
+		std::sort(fipsSpeciesMap[fips][sp].begin(),fipsSpeciesMap[fips][sp].end(),comparePop(ft)); // comparePop struct defined in Grid_manager.h
 	}
 
 	// calculate normInf and normSus
 	for (auto& sp:speciesOnPrems){
 		// sp is species name, sumP is sum of each (herd size^p)
-		normInf[sp] = 0.0; //Start at zero and only calc if the total sum of animals of this species is > 0. Otherwise div. by zero and res = nan.
-		normSus[sp] = 0.0;
-		if(sumSp.at(sp) > 0)
+		normInf[sp] = { 0.0, 0.0, 0.0, 0.0 }; //Start at zero and only calc if the total sum of animals of this species is > 0. Otherwise div. by zero and res = nan.
+		normSus[sp] = { 0.0, 0.0, 0.0, 0.0 };
+		for(unsigned int quarter_idx=0; quarter_idx<4; ++quarter_idx)
         {
-            normInf[sp] = infValues.at(sp)*(sumSp.at(sp)/sumP.at(sp)); // infectiousness normalizer
-            normSus[sp] = susValues.at(sp)*(sumSp.at(sp)/sumQ.at(sp)); // susceptibility normalizer
+            if(sumSp.at(sp).at(quarter_idx) > 0)
+            {
+                normInf[sp][quarter_idx] = infValues.at(sp)*(sumSp.at(sp).at(quarter_idx) / sumP.at(sp).at(quarter_idx)); // infectiousness normalizer
+                normSus[sp][quarter_idx] = susValues.at(sp)*(sumSp.at(sp).at(quarter_idx) /sumQ.at(sp).at(quarter_idx)); // susceptibility normalizer
+            }
+            if (verbose>0){
+                std::cout<<sp<<" normalized inf, q" << quarter_idx+1 << ": "<<normInf.at(sp).at(quarter_idx)<<
+                           ", normalized sus, q" << quarter_idx+1 << ": "<<normSus.at(sp).at(quarter_idx)<<std::endl;
+            }
         }
 
-
-if (verbose>0){
-        std::cout<<sp<<" normalized inf: "<<normInf.at(sp)<<", normalized sus: "<<normSus.at(sp)<<std::endl;
-}
 	}
 
     double maxFarmInf = 0.0;
@@ -353,23 +633,207 @@ if (verbose>0){
 
 }
 
+void Grid_manager::initSlaughterProportions()
+{
+    std::ifstream f(parameters->btb_slaughter_prop_fname);
+	if(!f){std::cout << "Slaughter proportions file not found. Exiting..." << std::endl; exit(EXIT_FAILURE);}
+	if(f.is_open())
+	{
+	    skipBOM(f);
+		while(!f.eof())
+		{
+			std::string line;
+			getline(f, line); // get line from file "f", save as "line"
+			std::vector<std::string> line_vector = split(line, '\t'); // separate by tabs
+            if(! line_vector.empty()) // if line_vector has something in it
+            {
+                std::vector<std::string> label_v = split(line_vector[0], '_');
+                if(!label_v.empty())
+                {
+                    if(label_v[0] == "ProportionAnimalstoSlaughter")
+                    {
+                        btb_animal_slaughter_prop[label_v[1]][label_v[2]] = std::stod(line_vector[1]);
+                    }
+                    else if(label_v[0] == "ProportionShipstoSlaughter")
+                    {
+                        std::vector<std::string> size_limits = split(label_v[3], '-');
+                        btb_shipment_slaughter_prop[label_v[1]][label_v[2]].emplace_back(std::vector<double>({ std::stod(size_limits[0]),
+                                                                                                               std::stod(size_limits[1]),
+                                                                                                               std::stod(line_vector[1]) }));
+                    }
+                    else
+                    {
+                        std::cout << "Unknown slaughter proportion label: " << label_v[0] << std::endl;
+                        exit(EXIT_FAILURE);
+                    }
+                }
+
+
+
+            }
+		}
+	}
+}
+
+void Grid_manager::initSlaughterShed()
+{
+    std::ifstream f(parameters->btb_slaughtershed_fname);
+	if(!f){std::cout << "Slaughtershed file not found. Exiting..." << std::endl; exit(EXIT_FAILURE);}
+	if(f.is_open())
+	{
+	    skipBOM(f);
+        std::string header;
+        getline(f, header); //Plant id, alpha, beta, FIPS1, FIPS2, ...
+        std::vector<std::string> header_v = split(header, '\t');
+        std::vector<int> fips_keys(header_v.size()-3, -1);
+        std::set<std::string> temp_fips_set; //Just to check against to make sure all counties in the simulation are present in the slaughtershed matr.
+        for(size_t col_i=3; col_i<header_v.size(); ++col_i)
+        {
+            int fips_code = std::stoi(header_v[col_i]);
+            fips_keys[col_i-3] = fips_code; //Extract all county fips keys from the header.
+            temp_fips_set.insert(std::to_string(fips_code));
+        }
+
+        int n_missing_counties = 0;
+        for(County* c : FIPS_vector)
+        {
+            if(temp_fips_set.find(c->get_id()) == temp_fips_set.end())
+            {
+                std::cout << "The county " << c->get_id() << " was not found in the slaughtershed file." << std::endl;
+                n_missing_counties += 1;
+
+            }
+        }
+
+        if(n_missing_counties > 0)
+        {
+            exit(EXIT_FAILURE);
+        }
+
+
+        btb_slaughtershed_facility_ids.reserve(1000);
+		while(!f.eof())
+		{
+			std::string line;
+			getline(f, line); // get line from file "f", save as "line"
+			std::vector<std::string> line_vector = split(line, '\t'); // separate by tabs
+
+            if(! line_vector.empty()) // if line_vector has something in it
+            {
+                //For each line, first store the facility ids...
+                int facility_id = std::stoi(line_vector[0]);
+                btb_slaughtershed_facility_ids.push_back(facility_id);
+                //Then store the alpha and beta parameters for that facility.
+                btb_sl_facility_alpha_beta_map[facility_id] = std::vector<double>({ std::stod(line_vector[1]),
+                                                                                    std::stod(line_vector[2]) });
+                //Then go through each county and store the specific probability for sending to this facility  given the county as origin.
+                for(size_t col_i=3; col_i<line_vector.size(); ++col_i)
+                {
+                    int fips_as_int = fips_keys[col_i-3];
+                    btb_slaughtershed_probabilities[fips_as_int].emplace_back(std::stod(line_vector[col_i]));
+                }
+            }
+		}
+	}
+}
+
 void Grid_manager::initFipsCovariatesAndCounties()
 {
     for(County* c : FIPS_vector)
     {
-        c->set_covariates(usamm_parameters);
+        if(usamm_version == 1 or usamm_version == 2)
+        {
+            c->set_covariates_USAMMv2(usammv2_parameters);
+        }
+        else if(usamm_version == 3)
+        {
+            c->set_covariates_USAMMv3(usammv3_parameters);
+            c->init_USAMMv3_shipment_vectors(usammv3_parameters);
+        }
+        c->init_ft_pcl_vec(prem_classes_by_ft);
         c->set_all_counties(&FIPS_vector);
     }
 }
 
-void Grid_manager::updateFipsShipping(std::string time_period)
+bool Grid_manager::updateUSAMMTimePeriod(int t, int day_of_year)
 {
-    for(County* c : FIPS_vector)
+    //Get the day of the year given the current timestep and the start day (from config file).
+    //This is needed since there can be (probably are) different shipping parameter sets for different
+    //time periods (eg. quarters, months) and the transitions need to be kept track of.
+//    int day_of_year = get_day_of_year(t, start_day);
+    size_t current_year = ((t*parameters->days_per_timestep-2 + start_day) / 365) + 1;
+    bool new_year = false;
+    if(current_year > USAMM_current_year)
     {
-        c->unset_shipping_probabilities();
-        c->update_covariate_weights(usamm_parameters, time_period);
+        USAMM_current_year = current_year;
+        new_year = true;
     }
-    normalizeShippingWeights();
+    //This vector contains the start day for the time periods.
+    const std::vector<int>& start_points = parameters->USAMM_temporal_start_points;
+    bool update_parameters = false;
+    //Update the index (USAMM_temporal_index) that tells us what time period we are in
+    //given the current timestep - check each start point to see which period  the current day of year falls into.
+    for(int i = int(start_points.size())-1; i >= 0; i--)
+    {
+        if(day_of_year >= start_points.at(i))
+        {
+            //If the index given by timestep has changed compared to USAMM_temporal_index we are in a
+            //new time period.
+            if(i != USAMM_temporal_index or new_year)
+            {
+                //Time period has changed from previous day. Parameters need to be updated. This will
+                //always happen upon construction of Grid_manager since USAMM_temporal_index = -1 on construction.
+                //This causes all states to update the relevant parameters and then the counties to
+                //update their covariate weights (which are functions of time-dependent covariate parameters)
+                //and shipping probabilities.
+                USAMM_temporal_index = i;
+                USAMM_temporal_name = parameters->USAMM_temporal_order.at(USAMM_temporal_index);
+                days_in_period = parameters->USAMM_temporal_n_days.at(USAMM_temporal_index);
+                update_parameters = true;
+            }
+            break;
+        }
+    }
+
+    //Calculate the number of remaining days in this time period. This is used when determining
+    //the number of shipments from a state when starting the simulation/generation in the middle
+    //of a time period.
+    if(USAMM_temporal_index == int(start_points.size())-1)
+    {
+        days_rem_of_period = 366 - day_of_year;
+    }
+    else
+    {
+        days_rem_of_period = start_points[USAMM_temporal_index+1] - day_of_year;
+    }
+    days_rem_of_period = std::min(days_rem_of_period, size_t(parameters->timesteps + 1 - t));
+
+    return update_parameters;
+}
+
+void Grid_manager::updateCountyShipping(std::string time_period, bool reset)
+{
+    if(usamm_version == 1 or usamm_version == 2)
+    {
+        for(County* c : FIPS_vector)
+        {
+            c->unset_shipping_probabilities(false);
+            c->update_covariate_weights_USAMMv2(usammv2_parameters, time_period);
+        }
+        normalizeShippingWeightsUSAMMv2();
+    }
+    else if(usamm_version == 3)
+    {
+        for(County* c : FIPS_vector)
+        {
+            c->unset_shipping_probabilities(reset);
+            c->update_covariate_weights_USAMMv3(usammv3_parameters, time_period);
+        }
+//        for(County* c : FIPS_vector)
+//        {
+//            c->update_cc_shipment_rate(usammv3_parameters, time_period);
+//        }
+    }
 }
 
 void Grid_manager::updateStateLambdas()
@@ -395,8 +859,22 @@ void Grid_manager::updateStatesShipping(std::string time_period, size_t days_in_
         }
         for(Farm_type* this_ft : farm_types_vec)
         {
-            state_pair.second->set_shipping_parameters(parameters->usamm_version, usamm_parameters.at(this_ft),
-                                                       this_ft, time_period, days_in_period, days_rem);
+            if(usamm_version == 1 or usamm_version == 2)
+            {
+                state_pair.second->set_shipping_parameters_USAMMv2(parameters->usamm_version, usammv2_parameters.at(this_ft),
+                                                                   this_ft, time_period, days_in_period, days_rem);
+            }
+            else if(usamm_version == 3)
+            {
+                state_pair.second->set_shipping_parameters_USAMMv3(parameters->usamm_version, usammv3_parameters.at(this_ft->get_index()),
+                                                                   this_ft, time_period, days_rem);
+            }
+            else
+            {
+                std::cout << "Bad USAMM version " << usamm_version << "." << std::endl;
+                exit(EXIT_FAILURE);
+            }
+
         }
     }
 }
@@ -946,7 +1424,20 @@ if(verbose>1){std::cout << "Distance squared between "<<whichCell1<<" & "<<which
 				cell2->addNeighbor(cell1);
 			}
 			// kernel value between c1, c2
-			double gridValue = kernel->atDistSq(shortestDist2);
+			double gridValue = 0.0;
+			if(parameters->infectionType == InfectionType::BTB)
+            {
+                //Since we have quarterly parameters for the btb kernel, find the max from the quarters.
+                for(int quarter_idx=0; quarter_idx<4; ++quarter_idx)
+                {
+                    gridValue = std::max(kernel->atDistSq(shortestDist2, maxNormedWildlDens, quarter_idx), gridValue);
+                }
+            }
+            else
+            {
+                gridValue = kernel->atDistSq(shortestDist2);
+            }
+
 if(verbose>1){std::cout << "Kernel between "<<whichCell1<<"&"<<whichCell2<<": "<<gridValue<<std::endl;}
 				// store kernel * max sus (part of all prob calculations)
 				double maxS2 = cell2->Grid_cell::get_maxSus();
@@ -987,14 +1478,32 @@ void Grid_manager::set_FarmSus(Farm* f)
 	// calculates species-specific susceptibility for a premises
 	// USDOSv1 uses scaling factor (for q, susceptibility)
 	// 2.086 x 10^-7, or that times sum of all US cattle: 19.619
-	double premSus = 0.0;
-	for (auto& sp:speciesOnPrems){
-		double n_animals = double(f->get_size(sp)); // i.e. get_size("beef") gets # of beef cattle on premises
-		double spSus = normSus.at(sp)*pow(n_animals, susExponents.at(sp)); // multiply by stored susceptibility value for this species/type
-		premSus += spSus; // add this species to the total for this premises
-	}
-	f->set_sus(premSus);
-	//std::cout << "Prem sus = " << f->get_sus() << ". ";
+	if(parameters->infectionType == InfectionType::BTB)
+    {
+        if(f->is_market())
+        {
+            f->set_sus_all_quarters(0.0);
+        }
+        else
+        {
+            f->set_sus_all_quarters(1.0);
+        }
+    }
+    else
+    {
+        for(unsigned int quarter_idx=0; quarter_idx<4; ++quarter_idx)
+        {
+            double premSus = 0.0;
+            for (Farm_type* ft : farm_types_vec)
+            {
+                std::string sp = ft->get_species();
+                double n_animals = double(f->get_size_specific_quarter(ft, quarter_idx));
+                double spSus = normSus.at(sp).at(quarter_idx)*std::pow(n_animals, susExponents.at(sp)); // multiply by stored susceptibility value for this species/type
+                premSus += spSus; // add this species to the total for this premises
+            }
+            f->set_sus(premSus, quarter_idx); //Keeps track of max internally as it's not a function of the PT function.
+        }
+    }
 }
 
 /// Used after grid creation to assign infectiousness values to individual premises
@@ -1003,14 +1512,70 @@ void Grid_manager::set_FarmInf(Farm* f)
 	// calculates species-specific infectiousness for a premises
 	// USDOSv1 uses scaling factor (for p, transmissibility)
 	// 2.177 x 10^-7, or that times sum of all US cattle: 20.483
-	double premInf = 0.0;
-	for (auto& sp:speciesOnPrems){
-		double n_animals = double(f->get_size(sp)); // i.e. get_size("beef") gets # of beef cattle on premises
-		double spInf = normInf.at(sp)*pow(n_animals, infExponents.at(sp)); // susceptibility value for this species/type
-		premInf += spInf; // add this species to the total for this premises
-	}
-	f->set_inf(premInf);
-	//std::cout << "Prem inf = " << f->get_inf() << ". ";
+	if(parameters->infectionType == InfectionType::BTB)
+    {
+        if(f->is_market())
+        {
+            f->set_inf_all_quarters(0.0);
+            f->set_inf_max(0.0);
+        }
+        else
+        {
+            f->set_inf_all_quarters(f->get_size_allSpecies());
+            f->set_inf_max(f->get_size_allSpecies());
+        }
+    }
+    else
+    {
+        double highest_inf = 0.0;
+        for(unsigned int quarter_idx=0; quarter_idx<4; ++quarter_idx)
+        {
+            double premInf = 0.0;
+            for (Farm_type* ft : farm_types_vec)
+            {
+                std::string sp = ft->get_species();
+                double n_animals = double(f->get_size_specific_quarter(ft, quarter_idx));
+                double spInf = normInf.at(sp).at(quarter_idx)*std::pow(n_animals, infExponents.at(sp)); // susceptibility value for this species/type
+                premInf += spInf; // add this species to the total for this premises
+            }
+            f->set_inf(premInf, quarter_idx);
+            if(premInf > highest_inf)
+            {
+                highest_inf = premInf;
+            }
+        }
+
+        if(parameters->partial == 0)
+        {
+            f->set_inf_max(highest_inf); //When partial transition is off, a premises max infectiousness is the same as it's maximum over the year.
+        }
+        else if(parameters->partial == 1)
+        {
+            double max_inf = 0.0;
+            for(unsigned int quarter_idx=0; quarter_idx<4; ++quarter_idx)
+            {
+                std::unordered_map<std::string, int> quarter_sp_counts; //Ugly hack as get_max_inf_partial requres a map with species names and numbers, and we need each quarterly size to feed into that function.
+                std::unordered_map<std::string, double> quarter_norm_inf; //Ugly hack as get_max_inf_partial requres a map with species names and numbers, and we need each quarterly size to feed into that function.
+                for(Farm_type* ft : farm_types_vec)
+                {
+                    quarter_sp_counts[ft->get_species()] = f->get_size_specific_quarter(ft, quarter_idx);
+                    quarter_norm_inf[ft->get_species()] = normInf.at(ft->get_species()).at(quarter_idx);
+                }
+                double quarter_max_inf = Prem_status::get_max_inf_partial(parameters, quarter_norm_inf, quarter_sp_counts);
+                if(quarter_max_inf > max_inf)
+                {
+                    max_inf = quarter_max_inf;
+                }
+            }
+            f->set_inf_max(max_inf);
+        }
+        else
+        {
+            std::cout << "Max infectiousness not implemented for partial transition option " <<
+                         parameters->partial << ". Exiting." << std::endl;
+            exit(EXIT_FAILURE);
+        }
+    }
 
 }
 
@@ -1052,85 +1617,45 @@ void Grid_manager::printCells()
 
 }
 
-void Grid_manager::updateShippingParameters(int t, bool restart)
+void Grid_manager::updateShippingParameters(int t, int day_of_year, bool restart)
 {
-    //Get the day of the year given the current timestep and the start day (from config file).
-    //This is needed since there can be (probably is) different shipping parameter sets for different
-    //time periods (eg. quarters, months) and the transitions need to be kept track of.
-
-    int day_of_year = get_day_of_year(t, start_day);
-//    int day_of_year = ((t-2 + start_day) % 365) + 1;
-    int current_year = ((t-2 + start_day) / 365) + 1;
-    bool new_year = false;
-    if(current_year > USAMM_current_year)
-    {
-        USAMM_current_year = current_year;
-        new_year = true;
-    }
-    //This vector contains the start day for the time periods.
-    const std::vector<int>& start_points = parameters->USAMM_temporal_start_points;
-    bool update_parameters = false;
-    //Update the index (USAMM_temporal_index) that tells us what time period we are in
-    //given the current timestep - check each start point to see which period  the current day of year falls into.
-    for(size_t i = start_points.size()-1; i >= 0; i--)
-    {
-        if(day_of_year >= start_points.at(i))
-        {
-            //If the index given by timestep has changed compared to USAMM_temporal_index we are in a
-            //new time period.
-            if(i != USAMM_temporal_index or new_year)
-            {
-                //Time period has changed from previous day. Parameters need to be updated. This will
-                //always happen upon construction of Grid_manager since USAMM_temporal_index = -1 on construction.
-                //This causes all states to update the relevant parameters and then the counties to
-                //update their covariate weights (which are functions of time-dependent covariate parameters)
-                //and shipping probabilities.
-                USAMM_temporal_index = i;
-                USAMM_temporal_name = parameters->USAMM_temporal_order.at(USAMM_temporal_index);
-                days_in_period = parameters->USAMM_temporal_n_days.at(USAMM_temporal_index);
-                update_parameters = true;
-            }
-            break;
-        }
-    }
-
-    //Calculate the number of remaining days in this time period. This is used when determining
-    //the number of shipments from a state when starting the simulation/generation in the middle
-    //of a time period.
-    if(USAMM_temporal_index == start_points.size()-1)
-    {
-        days_rem_of_period = 366 - day_of_year;
-    }
-    else
-    {
-        days_rem_of_period = start_points[USAMM_temporal_index+1] - day_of_year;
-    }
-    days_rem_of_period = std::min(days_rem_of_period, size_t(parameters->timesteps + 1 - t));
-
+    bool update_parameters = updateUSAMMTimePeriod(t, day_of_year);
     if(update_parameters or restart)
     {
+//        std::cout << "Updating USAMM shipping parameters..." << std::flush;
+//        std::clock_t update_start = std::clock();
         updateStatesShipping(USAMM_temporal_name, days_in_period, days_rem_of_period, restart);
-        updateFipsShipping(USAMM_temporal_name);
+        updateCountyShipping(USAMM_temporal_name, restart);
         if(parameters->usamm_version == 2)
         {
             updateStateLambdas();
         }
-        else if(parameters->usamm_version < 1 or parameters->usamm_version > 2)
+        else if(parameters->usamm_version < 1 or parameters->usamm_version > 3)
         {
             std::cout << "Shipments turned off or USAMM version undefined, but still in "
                       << "shipment-related code (updateShippingParameters). This should not happen."
                       << std::endl;
             exit(EXIT_FAILURE);
         }
+//        std::clock_t update_end = std::clock();
+//        double process_time = 1000.0 * (update_end - update_start) / CLOCKS_PER_SEC;
+//        std::cout << "done (" << process_time << " ms)." << std::endl;
     }
 }
 
 std::string Grid_manager::get_generation_string(Farm_type* ft)
 {
-    return usamm_parameters.at(ft).get_generation_string();
+    if(usamm_version == 3)
+    {
+        return usammv3_parameters.at(ft->get_index()).get_generation_string();
+    }
+    else
+    {
+        return usammv2_parameters.at(ft).get_generation_string();
+    }
 }
 
-void Grid_manager::normalizeShippingWeights()
+void Grid_manager::normalizeShippingWeightsUSAMMv2()
 {
     for(Farm_type* current_ft : farm_types_vec)
     {
@@ -1143,14 +1668,25 @@ void Grid_manager::normalizeShippingWeights()
 
 Farm_type* Grid_manager::get_farm_type_by_herd(std::string herd)
 {
+    if(farm_types_by_herd.empty())
+    {
+        //This is such a stupid way to do it...
+        for(size_t i=0; i< parameters->species.size(); ++i)
+        {
+            std::string s(parameters->species.size(), '0');
+            s[i] = '1';
+            farm_types_by_herd[s] = new Farm_type(s, parameters->species, i);
+            farm_types_vec.push_back(farm_types_by_herd[s]);
+            farm_types_by_name[farm_types_by_herd.at(s)->get_species()] = farm_types_by_herd.at(s);
+            s[i] = '0';
+        }
+    }
+
     if(farm_types_by_herd.find(herd) == farm_types_by_herd.end())
     {
-        //This farm type has not been created yet
-        unsigned int farm_type_index = farm_types_by_herd.size();
-        farm_types_by_herd[herd] = new Farm_type(herd, parameters->species, farm_type_index);
-        farm_types_vec.push_back(farm_types_by_herd[herd]);
-        farm_types_by_name[farm_types_by_herd.at(herd)->get_species()] = farm_types_by_herd.at(herd);
-        return farm_types_by_herd.at(herd);
+        //This farm type does not exist.
+        std::cout << "Failed to find farm type for herd " << herd << "." << std::endl;
+        exit(EXIT_FAILURE);
     }
     else
     {
@@ -1163,14 +1699,48 @@ Farm_type* Grid_manager::get_farm_type_by_name(std::string name)
     return farm_types_by_name.at(name);
 }
 
-std::vector<Farm_type*> Grid_manager::get_farm_types()
+Prem_class* Grid_manager::get_prem_class(std::string class_str, Farm_type* ft)
 {
-    return farm_types_vec;
+    //Prem class is farm, feedlot or market.
+    static std::map<std::string, std::string> class_translation = { {"b", "Frm"},
+                                                                    {"d", "Frm"},
+                                                                    {"s", "Frm"}, //To include swine.
+                                                                    {"f", "Fdl"},
+                                                                    {"m", "Mkt"} };
+    std::string class_name = "";
+    try
+    {
+        class_name = class_translation.at(class_str);
+    }
+    catch(std::out_of_range)
+    {
+        std::cout << "The prem type indicator " << class_str << " found in the FLAPS file is not valid."
+                  << " Should be one of b, d, s, f or m." << std::endl;
+        exit(EXIT_FAILURE);
+    }
+
+    Prem_class* pc = predefined_prem_classes.at(class_name);
+    if(prem_classes_by_ft.find(ft) == prem_classes_by_ft.end())
+    {
+        prem_classes_by_ft[ft] = std::set<Prem_class*>();
+    }
+    std::set<Prem_class*>& pcl_s = prem_classes_by_ft[ft];
+    if(pcl_s.find(pc) == pcl_s.end())
+    {
+        pcl_s.insert(pc);
+    }
+
+    return pc;
 }
 
 std::string Grid_manager::get_time_period()
 {
     return USAMM_temporal_name;
+}
+
+int Grid_manager::get_temporal_index()
+{
+    return USAMM_temporal_index;
 }
 
 size_t Grid_manager::get_days_in_period()
@@ -1252,7 +1822,17 @@ if (verbose>0){
 	std::vector<std::vector<Farm*>> tempOutput;
 		tempOutput.reserve(FIPS_vector.size());
 	for (auto& c:FIPS_vector){
-		std::vector<Farm*> premisesInCounty = c->get_farms();
+
+		std::vector<Farm*> premisesInCounty;
+        if(parameters->infectionType == InfectionType::FMD)
+        {
+            premisesInCounty = c->get_premises();
+        }
+        else if(parameters->infectionType == InfectionType::BTB)
+        {
+            //Seed only regular farms when simulating btb.
+            premisesInCounty = c->get_premises_by_class("Frm");
+        }
 		std::vector<Farm*> tempPremVector;
 		random_unique(premisesInCounty, 1, tempPremVector); // stores random premises in tempPremVector
 		tempOutput.emplace_back(tempPremVector);
@@ -1276,7 +1856,29 @@ if (verbose>0){
         //Convert string to int, and then back again in order to remove any zeros in the beginning.
         int int_fips = stringToNum<int>(c);
         std::string fips = std::to_string(int_fips);
-		std::vector<Farm*> premisesInCounty = FIPS_map.at(fips)->get_farms();
+		std::vector<Farm*> premisesInCounty;
+		County* seed_county = nullptr;
+		if(FIPS_map.find(fips) != FIPS_map.end())
+        {
+            seed_county = FIPS_map.at(fips);
+        }
+        else
+        {
+            std::cout << "Failed to find county " << fips << " when seeding a random premises. "
+                      << std::endl << "This probably happened because a seed county was specified "
+                      << "that does not exist in the FLAPS file and/or county list." << std::endl;
+            exit(EXIT_FAILURE);
+        }
+
+		if(parameters->infectionType == InfectionType::FMD)
+        {
+            premisesInCounty = seed_county->get_premises();
+        }
+        else if(parameters->infectionType == InfectionType::BTB)
+        {
+            //Seed only regular farms when simulating btb.
+            premisesInCounty = seed_county->get_premises_by_class("Frm");
+        }
 		random_unique(premisesInCounty, 1, tempPremVector); // stores random premises in tempPremVector
 		tempOutput.emplace_back(tempPremVector);
 	}
@@ -1465,7 +2067,7 @@ void Grid_manager::calc_neighborsInRadius(Farm* focal, const double radius,
 
 	std::multimap<double, Farm*> distancesNeighbors;
 
-	while (index < cellsToCheck.size()){
+	while (index < int(cellsToCheck.size())){
 		unsigned int numCornersInRadius = count_cellCornersWithinRadius(cellsToCheck.at(index),
 			center_x, center_y, radius, radiusSquared);
 		std::vector<Farm*> inCell = cellsToCheck.at(index)->Grid_cell::get_farms();
@@ -1636,13 +2238,45 @@ int Grid_manager::get_parentCell(double x, double y, std::string countyID){
 }
 
 // returns the norminf value for the species
-const std::unordered_map<std::string, double>& Grid_manager::get_normInf_map() const{
+const std::unordered_map<std::string, std::vector<double>>& Grid_manager::get_normInf_map() const{
 
     return normInf;
 }
 
-const std::unordered_map<std::string, double>& Grid_manager::get_normSus_map() const{
+const std::unordered_map<std::string, std::vector<double>>& Grid_manager::get_normSus_map() const{
 
     return normSus;
 }
 
+double Grid_manager::get_slaughter_shipment_factor(std::string species, std::string prem_class, int prem_size)
+{
+    if(btb_shipment_slaughter_prop.find(species) != btb_shipment_slaughter_prop.end())
+    {
+        if(btb_shipment_slaughter_prop[species].find(prem_class) != btb_shipment_slaughter_prop[species].end())
+        {
+            //There is a factor defined for this combination of farm typa and prem class.
+            const std::vector<std::vector<double>>& size_fac_combs = btb_shipment_slaughter_prop[species][prem_class];
+            for(const std::vector<double>& size_fac : size_fac_combs) //Each element is { low size, high size, factor }
+            {
+                if(prem_size >= size_fac.at(0) and prem_size <= size_fac.at(1))
+                {
+                    return size_fac.at(2);
+                }
+            }
+        }
+    }
+    return 0.0; //If the factor isn't defined for this farm type and prem class combination.
+}
+
+double Grid_manager::get_slaughter_fraction(std::string species, std::string prem_class)
+{
+    if(btb_animal_slaughter_prop.find(species) != btb_animal_slaughter_prop.end())
+    {
+        if(btb_animal_slaughter_prop[species].find(prem_class) != btb_animal_slaughter_prop[species].end())
+        {
+            //There is a fraction defined for this combination of farm typa and prem class.
+            return btb_animal_slaughter_prop[species][prem_class];
+        }
+    }
+    return 0.0; //If the fraction isn't defined for this farm type and prem class combination.
+}

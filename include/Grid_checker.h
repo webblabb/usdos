@@ -1,4 +1,3 @@
-
 #ifndef Grid_checker_h
 #define Grid_checker_h
 
@@ -16,7 +15,7 @@ class Grid_checker
 		const Parameters* p;
 		int verbose; ///< Can be set to override global setting for console output
 		std::vector<Grid_cell*> susceptible; ///< Local copy of cells, with vectors of susceptible farms within
-		std::vector<Farm*> exposed; ///< List of farms most recently exposed
+//		std::vector<Farm*> exposed; ///< List of farms most recently exposed
 		const std::unordered_map<int, Grid_cell*>* allCells; ///< Pointer to Grid_manager cells, referenced in infection evaluation among cells
         // variables for infection evaluation
         std::vector<std::string> speciesOnPrems; ///< List of species on all farms provided in premises file
@@ -27,9 +26,9 @@ class Grid_checker
         std::vector<double> partialParams;
         std::tuple<double, double> latencyParams;
 
-		void binomialEval(Farm* f1, Grid_cell* fc, Grid_cell* c2, int ccID, int t, std::vector<double> partialParams, std::vector<Farm*>& output, std::vector<double>& outputP); ///< Evaluates transmission from a focal farm to all susceptible farms in a cell via binomial method
-		void countdownEval(Farm*,Grid_cell*,Grid_cell*,int,std::vector<Farm*>&, int t, std::vector<double>partialParams); ///< Evaluates transmission from a focal farm to all susceptible farms in a cell via Keeling's "countdown" method
-		void pairwise(Farm*,Grid_cell*,Grid_cell*,int,std::vector<Farm*>&, int t , std::vector<double> partialParams); ///< Evaluates transmission from a focal farm to all susceptible farms in a cell pairwise
+		void binomialEval(Farm* f1, Grid_cell* fc, Grid_cell* c2, int ccID, int t, int quarter_idx, std::vector<double> partialParams, std::vector<Farm*>& output, std::vector<double>& outputP); ///< Evaluates transmission from a focal farm to all susceptible farms in a cell via binomial method
+//		void countdownEval(Farm*,Grid_cell*,Grid_cell*,int,std::vector<Farm*>&, int t, std::vector<double>partialParams); ///< Evaluates transmission from a focal farm to all susceptible farms in a cell via Keeling's "countdown" method
+//		void pairwise(Farm*,Grid_cell*,Grid_cell*,int,std::vector<Farm*>&, int t , std::vector<double> partialParams); ///< Evaluates transmission from a focal farm to all susceptible farms in a cell pairwise
 
 	public:
 		///< Makes local copy of all Grid_cells, initially set as susceptible to check local spread against
@@ -41,7 +40,7 @@ class Grid_checker
 		void stepThroughCells(
 			std::vector<Farm*>&, // infectious
 			std::vector<Farm*>&,//non-susceptible
-            int t);
+            int t, int quarter_idx);
 };
 
 ///> Determines if an object is present in a vector of objects.

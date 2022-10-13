@@ -77,7 +77,7 @@ Control_manager::~Control_manager()
 void Control_manager::read_controlLocations(const Parameters* p, std::string c_type)
 {
 	// find index of p->constraintFuncFileTypes == "resourceLocs"
-	int i = 0;
+	size_t i = 0;
 	bool found = 0;
 	while (i < (p->constraintFuncFileTypes).at(c_type).size() && found==0){
 		if ((p->constraintFuncFileTypes).at(c_type).at(i) == "resourceLocs"){
@@ -89,7 +89,7 @@ void Control_manager::read_controlLocations(const Parameters* p, std::string c_t
 	std::string controlLocFile = (p->constraintFuncFiles).at(c_type).at(i);
 
 	std::ifstream f(controlLocFile);
-	if(!f){std::cout << "Control locations file not found. Exiting..." << std::endl; exit(EXIT_FAILURE);}
+	if(!f){std::cout << "Failed to open " << controlLocFile << " Exiting..." << std::endl; exit(EXIT_FAILURE);}
 	// get daily limits (could also set up to read from external file)
 	std::vector<double> dailyLimitParams = (p->constraintFuncParams).at(c_type);
 
@@ -133,7 +133,7 @@ void Control_manager::read_controlLocations(const Parameters* p, std::string c_t
 void Control_manager::read_controlLocations_stateSum(const Parameters* p, std::string c_type)
 {
 	// find index of p->constraintFuncFileTypes == "resourceLocs"
-	int i = 0;
+	size_t i = 0;
 	bool found = 0;
 	while (i < (p->constraintFuncFileTypes).at(c_type).size() && found==0){
 		if ((p->constraintFuncFileTypes).at(c_type).at(i) == "resourceLocs"){
@@ -145,7 +145,7 @@ void Control_manager::read_controlLocations_stateSum(const Parameters* p, std::s
 	std::string controlLocFile = (p->constraintFuncFiles).at(c_type).at(i);
 
 	std::ifstream f(controlLocFile);
-	if(!f){std::cout << "Control locations file not found. Exiting..." << std::endl; exit(EXIT_FAILURE);}
+	if(!f){std::cout << "Failed to open " << controlLocFile << " Exiting..." << std::endl; exit(EXIT_FAILURE);}
 	// get daily limits (could also set up to read from external file)
 	std::vector<double> dailyLimitParams = (p->constraintFuncParams).at(c_type);
 
@@ -192,7 +192,7 @@ void Control_manager::read_controlResourceBoost_nationalLimit(const Parameters* 
     if (verbose>1){std::cout << "entering controlResourceBoost_nationalLimit" << std::endl;}
 
 	// find index of p->constraintFuncFileTypes == "resourceBoosts"
-	int i = 0;
+	size_t i = 0;
 	bool found = 0;
 	while (i < (p->constraintFuncFileTypes).at(c_type).size() && found==0){
 		if ((p->constraintFuncFileTypes).at(c_type).at(i) == "resourceBoosts"){

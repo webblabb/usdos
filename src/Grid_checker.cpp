@@ -43,7 +43,7 @@ Grid_checker::~Grid_checker()
 /// \param[in] focalFarms	All currently infectious premises
 /// \param[in] nonSus		All currently non-susceptible premises that cannot become exposed, including focalFarms
 void Grid_checker::stepThroughCells(std::vector<Farm*>& focalFarms,
-	std::vector<Farm*>& nonSus, int t)
+	std::vector<Farm*>& nonSus, int t, int quarter_idx)
 {
 //================================= update (vector of) susceptible Grid_cells*
 	if (nonSus.size()>0){
@@ -90,19 +90,21 @@ if (verbose>2){std::cout<<"Checking in-range comparison cell "<<ccID<<std::endl;
 			// Evaluation via gridding
 			std::vector<Farm*> fToCellExp; // farms exposed by f1
 			std::vector<double> trueProbs; // the true probability of transmission of each respective farm in fToCellExp
-			binomialEval(f1,fc,c2,ccID,t,partialParams,fToCellExp, trueProbs);
+			binomialEval(f1, fc, c2, ccID, t, quarter_idx, partialParams, fToCellExp, trueProbs);
 			// record sources of infection
 			for (size_t exp_farm_idx=0; exp_farm_idx<fToCellExp.size(); ++exp_farm_idx){
                 auto& exp1=fToCellExp.at(exp_farm_idx);
                 double trueP=trueProbs.at(exp_farm_idx);
 				statusManagerPointer -> Status_manager::add_premForEval(exp1, f1, 0, trueP);
 			}
+
+			//I don't think the following is used anymore, just leftovers since the pre-status_manager era /S
 			// add to "grand total" exposed list from other farm-cell comparisons if not already present
-			for (auto& exp2:fToCellExp){
-				if (!isWithin<Farm*>(exp2,exposed)){
-					exposed.emplace_back(exp2);
-				}
-			}
+//			for (auto& exp2:fToCellExp){
+//				if (!isWithin<Farm*>(exp2,exposed)){
+//					exposed.emplace_back(exp2);
+//				}
+//			}
 
 			} // end if fc can infect cc
 		} // end for loop through comparison cells
@@ -121,7 +123,7 @@ if (verbose>2){std::cout<<"Checking in-range comparison cell "<<ccID<<std::endl;
 ///	\param[out] output  Vector of Farm*s exposed by this infectious farm
 /// \param[out] outputP Vector of true probabilities of infection for each respective farm in the output vector.
 void Grid_checker::binomialEval(Farm* f1, Grid_cell* fc, Grid_cell* c2, int ccID,
-                                int t, std::vector<double> partialParams,
+                                int t, int quarter_idx, std::vector<double> partialParams,
                                 std::vector<Farm*>& output, std::vector<double>& outputP)
 {
 
@@ -130,26 +132,45 @@ void Grid_checker::binomialEval(Farm* f1, Grid_cell* fc, Grid_cell* c2, int ccID
 
     double focalInf; //current infectious of a farm
     //if the flag is 0 then use get_inf() to get the total infectiousness of farm
-    if(partial==0){
-        focalInf = f1->Farm::get_inf();
-    }else if(partial!=0){     //if the flag is 1 then use get_inf_partial_as_unvaccinated() to get the total infectiousness of farm as if it were unvaccinated
+    if(p->infectionType == InfectionType::BTB)
+    {
         int fid = f1->Farm::get_id();
         Prem_status* f1_pst = statusManagerPointer->get_correspondingPremStatus(fid); // creates pointer to prem_status object
-        focalInf = f1_pst->get_inf_partial_as_unvaccinated(t, p, statusManagerPointer->get_normInf_map()); //the current infectiouness of a farm
-    }else{
-        std::cout<<"ERROR: In Grid_checker:: Partial tranisition flag does not exist. Exiting...";
-        exit(EXIT_FAILURE);
+        focalInf = f1_pst->btb_get_prevalence_infectious();
+    }
+    else
+    {
+        if(partial==0){
+            focalInf = f1->Farm::get_inf(quarter_idx);
+        }else if(partial!=0){     //if the flag is 1 then use get_inf_partial_as_unvaccinated() to get the total infectiousness of farm as if it were unvaccinated
+            int fid = f1->Farm::get_id();
+            Prem_status* f1_pst = statusManagerPointer->get_correspondingPremStatus(fid); // creates pointer to prem_status object
+            focalInf = f1_pst->get_inf_partial_as_unvaccinated(t, quarter_idx, p, statusManagerPointer->get_normInf_map()); //the current infectiouness of a farm
+        }else{
+            std::cout<<"ERROR: In Grid_checker:: Partial tranisition flag does not exist. Exiting...";
+            exit(EXIT_FAILURE);
+        }
     }
 
 
+
 	double kern = fc->Grid_cell::kernelTo(ccID); //if dangerousContacts_on, this includes DC prob
-	double pmax = oneMinusExp(-focalInfMax * kern); // Overestimated probability for any single premises
+	double pmax; // Overestimated probability for any single premises
+	if(p->infectionType == InfectionType::BTB)
+    {
+        pmax = focalInfMax * kern; //The kernel is already defined at a monthly timestep, so no need to scale up from daily timesteps.
+    }
+    else
+    {
+        pmax = oneMinusExp(-focalInfMax * kern * p->days_per_timestep);
+    }
+
 	double N = c2->Grid_cell::get_num_farms();
 	std::vector<Farm*> fcexp; fcexp.reserve(N); // fcexp = "focal-comparison exposures"
 	std::vector<double> fcexpP; fcexpP.reserve(N); // fcexpK = "focal-comparison exposures kernel value for (true) probabilities"
 
 	// draw number of hypothetical farms exposed, from binomial
-	int numExp = draw_binom(N,pmax);
+	int numExp = draw_binom(N, pmax);
 
 	if (numExp == 0){ // no infected (or DC, if dangerousContacts_on) premises in this cell
 	} else if (numExp > 0){
@@ -160,6 +181,7 @@ void Grid_checker::binomialEval(Farm* f1, Grid_cell* fc, Grid_cell* c2, int ccID
 		// evaluate each of the randomly selected farms
 if(verbose>2){std::cout<<"Pmax: "<<pmax<<", "<<hypExposed.size()<<" hypothetical infections out of "
 	<<compFarms.size()<<" farms in cell."<<std::endl;}
+		std::vector<bool> dcEvaluations(p->NUM_DISEASE_STATUSES, false);
 		for (auto& f2:hypExposed){
 			// calc actual probabilities
 			double f1x = f1 -> Farm::get_x();
@@ -169,11 +191,26 @@ if(verbose>2){std::cout<<"Pmax: "<<pmax<<", "<<hypExposed.size()<<" hypothetical
 			double xdiff = (f1x - f2x);
 			double ydiff = (f1y - f2y);
 			double distBWfarmssq = xdiff*xdiff + ydiff*ydiff;
-			double kernelBWfarms = kernel->atDistSq(distBWfarmssq); // kernelsq calculates kernel based on distance squared
-			double compSus = f2->Farm::get_sus(); // susceptible farm in comparison cell
+
 			// calculate probability between these specific farms
-			double ptrue = oneMinusExp(-focalInf * compSus * kernelBWfarms); // prob tx between this farm pair
-			if(verbose>2){std::cout<<"Inf: "<<focalInf<<", sus: "<<compSus<<", kernel: "<<kernelBWfarms<<", Ptrue "<<ptrue<<std::endl;}
+			double ptrue;
+			if(p->infectionType == InfectionType::BTB)
+            {
+                double kernelBWfarms = kernel->atDistSq(distBWfarmssq, f1->get_parent_county()->get_wildlife_density(), quarter_idx); // kernelsq calculates kernel based on distance squared
+                ptrue = focalInf * kernelBWfarms; //The kernel is already defined at a monthly timestep, so no need to scale up from daily timesteps.
+                if(f1 == f2)
+                {
+                    ptrue = 0.0; //For btb, premises *can* be exposed multiple times through local spread, but a prem can't expose itself.
+                }
+            }
+			else
+            {
+                double kernelBWfarms = kernel->atDistSq(distBWfarmssq); // kernelsq calculates kernel based on distance squared
+                double compSus = f2->Farm::get_sus(quarter_idx); // susceptible farm in comparison cell
+                ptrue = oneMinusExp(-focalInf * compSus * kernelBWfarms * p->days_per_timestep); // prob tx between this farm pair
+                if(verbose>2){std::cout<<"Inf: "<<focalInf<<", sus: "<<compSus<<", kernel: "<<kernelBWfarms<<", Ptrue "<<ptrue<<std::endl;}
+            }
+
 			double random = uniform_rand();
 			if (random <= ptrue/pmax){ // actual infection
 if (verbose>1){std::cout << "Infection @ distance: "<< std::sqrt(distBWfarmssq)/1000 << " km, prob "<<ptrue<<std::endl;}
@@ -183,17 +220,18 @@ if (verbose>1){std::cout << "Infection @ distance: "<< std::sqrt(distBWfarmssq)/
 			std::string f1Status = statusManagerPointer -> Status_manager::getAny_fileStatus(f1);
 			if (p->dangerousContacts_on==1 && f1Status.compare("reported")!=0){
 			// only bother calculating DCs if f1 is not yet reported, any DCs post-reporting are never used
-				std::unordered_map<std::string, bool> dcEvaluations;
+				std::fill(dcEvaluations.begin(), dcEvaluations.end(), false);
 				bool possibleDC = 0;
 				for (auto& r:(p->dcRiskScale)){
 					double pDC = ptrue*r.second; // prob of being DC when status is r.first
 					double random = uniform_rand();
+					int status_idx = static_cast<int>(r.first); //DiseaseStatus to int.
 					if (random <= pDC/pmax){
-						dcEvaluations[r.first] = 1;
+						dcEvaluations[status_idx] = true;
 						possibleDC = 1;
 if (verbose>1){std::cout<<"Dangerous contact identified"<<std::endl;}
 					} else {
-						dcEvaluations[r.first] = 0;
+						dcEvaluations[status_idx] = false;
 					}
 				}
 				if (possibleDC){
@@ -210,132 +248,135 @@ if (verbose>1){std::cout<<"Dangerous contact identified"<<std::endl;}
 	fcexpP.swap(outputP);
 }
 
-///	Calculates and evaluates probability of cell entry, then steps through each premises
-///	in cell and evaluates adjusted probabilities (Keeling's method)
-/// \param[in]	f1	Infectious farm from which to evaluate transmission
-///	\param[in]	fc	Focal cell containing infectious premises
-///	\param[in]	c2	Comparison cell containing susceptible premises (can be same as fc)
-///	\param[in]	ccID	ID of comparison cell
-///	\param[out]	output	Vector of Farm*s exposed by this infectious premises
-void Grid_checker::countdownEval(Farm* f1, Grid_cell* fc, Grid_cell* c2, int ccID,
-	std::vector<Farm*>& output, int t,  std::vector<double> partialParams)
-{
-    double focalInfMax = f1->Farm::get_inf_max(); // the maximum infectiousness of a farm
+//Unused local speread transmission function (Keelings method)
+/////	Calculates and evaluates probability of cell entry, then steps through each premises
+/////	in cell and evaluates adjusted probabilities (Keeling's method)
+///// \param[in]	f1	Infectious farm from which to evaluate transmission
+/////	\param[in]	fc	Focal cell containing infectious premises
+/////	\param[in]	c2	Comparison cell containing susceptible premises (can be same as fc)
+/////	\param[in]	ccID	ID of comparison cell
+/////	\param[out]	output	Vector of Farm*s exposed by this infectious premises
+//void Grid_checker::countdownEval(Farm* f1, Grid_cell* fc, Grid_cell* c2, int ccID,
+//	std::vector<Farm*>& output, int t,  std::vector<double> partialParams)
+//{
+//    double focalInfMax = f1->Farm::get_inf_max(); // the maximum infectiousness of a farm
+//
+//    double focalInf; //current infectious of a farm
+//    //if the flag is 0 then use get_inf() to get the total infectiousness of farm
+//    if(partial==0){
+//        focalInf = f1->Farm::get_inf();
+//    }else if(partial!=0){     //if the flag is 1 then use get_inf_partial_as_unvaccinated() to get the total infectiousness of farm
+//        int fid = f1->Farm::get_id();
+//        Prem_status* f1_pst = statusManagerPointer->get_correspondingPremStatus(fid); // creates pointer to prem_status object
+//        focalInf = f1_pst->get_inf_partial_as_unvaccinated(t, p, statusManagerPointer->get_normInf_map()); //the current infectiouness of a farm
+//    }else{
+//        std::cout<<"ERROR: In Grid_checker:: Partial tranisition flag does not exist. Exiting...";
+//        exit(EXIT_FAILURE);
+//    }
+//	double kern = fc->Grid_cell::kernelTo(ccID);
+//	double pmax = oneMinusExp(-focalInfMax * kern * p->days_per_timestep); // Overestimated probability for any single premises, "prob6" in MT's Fortran code:
+//	double N = c2->Grid_cell::get_num_farms();
+//	double pcell = oneMinusExp(-focalInf * kern * N * p->days_per_timestep); // Probability of cell entry
+//
+//	std::vector<Farm*> fcexp; fcexp.reserve(N); // fcexp = "focal-comparison exposures"
+//
+//	double s = 1; // on/off switch, 1 = on (single hypothetical infection hasn't happened yet)
+//	double random1 = uniform_rand();
+//// Grid checkpoint A
+//	if (random1 <= pcell){ // if farm to cell succeeds
+// 		int f2count = 1; // how many farms in comparison cell have been checked
+// 		std::vector<Farm*> compFarms = c2->get_farms();
+//		for (auto& f2:compFarms){
+//			double oneMinusExpA = oneMinusExp(-focalInf * kern * (N+1-f2count) * p->days_per_timestep); // 1 - exp(A)
+//			double pcellAdj = 1 - s + s*oneMinusExpA; // equivalent to 1 - s*exp(A)
+//			double random2 = uniform_rand(); // "prob4" in MT's Fortran code
+//// Grid checkpoint B
+//			if (random2 <= pmax/pcellAdj){
+//			// if (one max susceptible)/(entrance prob accounting for # of farms checked) succeeds
+//			s = 0; // remainingFarmProb recalculates to 1 for remainder of loop
+//			// get actual distances between farms
+//			double f1x = f1 -> Farm::get_x();
+//			double f1y = f1 -> Farm::get_y();
+//			double f2x = f2 -> Farm::get_x();
+//			double f2y = f2 -> Farm::get_y();
+//			double xdiff = (f1x - f2x);
+//			double ydiff = (f1y - f2y);
+//			double distBWfarmssq = xdiff*xdiff + ydiff*ydiff;
+//			double kernelBWfarms = kernel->atDistSq(distBWfarmssq); // kernelsq calculates kernel based on distance squared
+//			double compSus = f2->Farm::get_sus(); // susceptible farm in comparison cell (farmInf already defined from focal cell)
+//
+//			// calculate probability between these specific farms
+//			// "prob3" in MT's Fortran code
+//			double ptrue = 1-exp(-focalInf * compSus * kernelBWfarms);
+//// Grid checkpoint C
+//			if (random2 <= ptrue/pcellAdj){
+//				// infect
+//				if(verbose>1){
+//					std::cout << "Infection @ distance: ";
+//					std::cout << std::sqrt(distBWfarmssq)/1000 << ", prob "<<ptrue<<std::endl;
+//				}
+//				fcexp.emplace_back(f2);
+//			}
+//		 } // end "if farm hypothetically exposed"
+//		 f2count++;
+//		} // end "for each comparison farm"
+//	} // end "if >1 hypothetical infection"
+//	fcexp.swap(output);
+//}
 
-    double focalInf; //current infectious of a farm
-    //if the flag is 0 then use get_inf() to get the total infectiousness of farm
-    if(partial==0){
-        focalInf = f1->Farm::get_inf();
-    }else if(partial!=0){     //if the flag is 1 then use get_inf_partial_as_unvaccinated() to get the total infectiousness of farm
-        int fid = f1->Farm::get_id();
-        Prem_status* f1_pst = statusManagerPointer->get_correspondingPremStatus(fid); // creates pointer to prem_status object
-        focalInf = f1_pst->get_inf_partial_as_unvaccinated(t, p, statusManagerPointer->get_normInf_map()); //the current infectiouness of a farm
-    }else{
-        std::cout<<"ERROR: In Grid_checker:: Partial tranisition flag does not exist. Exiting...";
-        exit(EXIT_FAILURE);
-    }
-	double kern = fc->Grid_cell::kernelTo(ccID);
-	double pmax = oneMinusExp(-focalInfMax * kern); // Overestimated probability for any single premises, "prob6" in MT's Fortran code:
-	double N = c2->Grid_cell::get_num_farms();
-	double pcell = oneMinusExp(-focalInf * kern * N); // Probability of cell entry
 
-	std::vector<Farm*> fcexp; fcexp.reserve(N); // fcexp = "focal-comparison exposures"
-
-	double s = 1; // on/off switch, 1 = on (single hypothetical infection hasn't happened yet)
-	double random1 = uniform_rand();
-// Grid checkpoint A
-	if (random1 <= pcell){ // if farm to cell succeeds
- 		int f2count = 1; // how many farms in comparison cell have been checked
- 		std::vector<Farm*> compFarms = c2->get_farms();
-		for (auto& f2:compFarms){
-			double oneMinusExpA = oneMinusExp(-focalInf * kern * (N+1-f2count)); // 1 - exp(A)
-			double pcellAdj = 1 - s + s*oneMinusExpA; // equivalent to 1 - s*exp(A)
-			double random2 = uniform_rand(); // "prob4" in MT's Fortran code
-// Grid checkpoint B
-			if (random2 <= pmax/pcellAdj){
-			// if (one max susceptible)/(entrance prob accounting for # of farms checked) succeeds
-			s = 0; // remainingFarmProb recalculates to 1 for remainder of loop
-			// get actual distances between farms
-			double f1x = f1 -> Farm::get_x();
-			double f1y = f1 -> Farm::get_y();
-			double f2x = f2 -> Farm::get_x();
-			double f2y = f2 -> Farm::get_y();
-			double xdiff = (f1x - f2x);
-			double ydiff = (f1y - f2y);
-			double distBWfarmssq = xdiff*xdiff + ydiff*ydiff;
-			double kernelBWfarms = kernel->atDistSq(distBWfarmssq); // kernelsq calculates kernel based on distance squared
-			double compSus = f2->Farm::get_sus(); // susceptible farm in comparison cell (farmInf already defined from focal cell)
-
-			// calculate probability between these specific farms
-			// "prob3" in MT's Fortran code
-			double ptrue = 1-exp(-focalInf * compSus * kernelBWfarms);
-// Grid checkpoint C
-			if (random2 <= ptrue/pcellAdj){
-				// infect
-				if(verbose>1){
-					std::cout << "Infection @ distance: ";
-					std::cout << std::sqrt(distBWfarmssq)/1000 << ", prob "<<ptrue<<std::endl;
-				}
-				fcexp.emplace_back(f2);
-			}
-		 } // end "if farm hypothetically exposed"
-		 f2count++;
-		} // end "for each comparison farm"
-	} // end "if >1 hypothetical infection"
-	fcexp.swap(output);
-}
-
-/// Calculates filtered pairwise transmission: only makes pairwise calculations if random
-/// number passes pmax filter
-/// \param[in]	f1	Infectious farm from which to evaluate transmission
-///	\param[in]	fc	Focal cell containing infectious premises
-///	\param[in]	c2	Comparison cell containing susceptible premises (can be same as fc)
-///	\param[in]	ccID	ID of comparison cell
-///	\param[out]	output	Vector of Farm*s exposed by this infectious premises
-void Grid_checker::pairwise(Farm* f1, Grid_cell* fc, Grid_cell* c2, int ccID,
-	std::vector<Farm*>& output, int t,  std::vector<double> partialParams)
-{
-    double focalInfMax = f1->Farm::get_inf_max(); // the maximum infectiousness of a farm
-
-    double focalInf; //current infectious of a farm
-    //if the flag is 0 then use get_inf() to get the total infectiousness of farm
-    if(partial==0){
-        focalInf = f1->Farm::get_inf();
-    }else if(partial!=0){     //if the flag is 1 then use get_inf_partial_as_unvaccinated() to get the total infectiousness of farm
-        int fid = f1->Farm::get_id();
-        Prem_status* f1_pst = statusManagerPointer->get_correspondingPremStatus(fid); // creates pointer to prem_status object
-        focalInf = f1_pst->get_inf_partial_as_unvaccinated(t, p, statusManagerPointer->get_normInf_map()); //the current infectiouness of a farm
-    }else{
-        std::cout<<"ERROR: In Grid_checker:: Partial tranisition flag does not exist. Exiting...";
-        exit(EXIT_FAILURE);
-    }
-
-	double kern = fc->Grid_cell::kernelTo(ccID);
-	double pmax = oneMinusExp(-focalInfMax * kern); // Overestimate of p for all farms in this cell
-	std::vector<Farm*> cFarms = c2->Grid_cell::get_farms();
-
-	std::vector<Farm*> fcexp; fcexp.reserve(cFarms.size()); // For output
-
-	for (auto& cf:cFarms){
-		double random = uniform_rand();
-		if (random <= pmax){
-			double f1x = f1 -> Farm::get_x();
-			double f1y = f1 -> Farm::get_y();
-			double f2x = cf -> Farm::get_x();
-			double f2y = cf -> Farm::get_y();
-			double xdiff = (f1x - f2x);
-			double ydiff = (f1y - f2y);
-			double distBWfarmssq = xdiff*xdiff + ydiff*ydiff;
-			double kernelBWfarms = kernel->atDistSq(distBWfarmssq); // kernelsq calculates kernel based on distance squared
-			double compSus = cf->Farm::get_sus(); // susceptible farm in comparison cell
-
-			// calculate probability between these specific farms
-			double ptrue = oneMinusExp(-focalInf * compSus * kernelBWfarms); // prob tx between this farm pair
-			if (random <= ptrue){ // actual infection
-if(verbose>1){std::cout << "Infection @ distance: "<< std::sqrt(distBWfarmssq)/1000 << " km, prob "<<ptrue<<std::endl;}
-					fcexp.emplace_back(cf);
-			}
-		}
-	}
-	fcexp.swap(output);
-}
+//Unused unoptimzed naive pairwise local spread evaluation.
+///// Calculates filtered pairwise transmission: only makes pairwise calculations if random
+///// number passes pmax filter
+///// \param[in]	f1	Infectious farm from which to evaluate transmission
+/////	\param[in]	fc	Focal cell containing infectious premises
+/////	\param[in]	c2	Comparison cell containing susceptible premises (can be same as fc)
+/////	\param[in]	ccID	ID of comparison cell
+/////	\param[out]	output	Vector of Farm*s exposed by this infectious premises
+//void Grid_checker::pairwise(Farm* f1, Grid_cell* fc, Grid_cell* c2, int ccID,
+//	std::vector<Farm*>& output, int t,  std::vector<double> partialParams)
+//{
+//    double focalInfMax = f1->Farm::get_inf_max(); // the maximum infectiousness of a farm
+//
+//    double focalInf; //current infectious of a farm
+//    //if the flag is 0 then use get_inf() to get the total infectiousness of farm
+//    if(partial==0){
+//        focalInf = f1->Farm::get_inf();
+//    }else if(partial!=0){     //if the flag is 1 then use get_inf_partial_as_unvaccinated() to get the total infectiousness of farm
+//        int fid = f1->Farm::get_id();
+//        Prem_status* f1_pst = statusManagerPointer->get_correspondingPremStatus(fid); // creates pointer to prem_status object
+//        focalInf = f1_pst->get_inf_partial_as_unvaccinated(t, p, statusManagerPointer->get_normInf_map()); //the current infectiouness of a farm
+//    }else{
+//        std::cout<<"ERROR: In Grid_checker:: Partial tranisition flag does not exist. Exiting...";
+//        exit(EXIT_FAILURE);
+//    }
+//
+//	double kern = fc->Grid_cell::kernelTo(ccID);
+//	double pmax = oneMinusExp(-focalInfMax * kern * p->days_per_timestep); // Overestimate of p for all farms in this cell
+//	std::vector<Farm*> cFarms = c2->Grid_cell::get_farms();
+//
+//	std::vector<Farm*> fcexp; fcexp.reserve(cFarms.size()); // For output
+//
+//	for (auto& cf:cFarms){
+//		double random = uniform_rand();
+//		if (random <= pmax){
+//			double f1x = f1 -> Farm::get_x();
+//			double f1y = f1 -> Farm::get_y();
+//			double f2x = cf -> Farm::get_x();
+//			double f2y = cf -> Farm::get_y();
+//			double xdiff = (f1x - f2x);
+//			double ydiff = (f1y - f2y);
+//			double distBWfarmssq = xdiff*xdiff + ydiff*ydiff;
+//			double kernelBWfarms = kernel->atDistSq(distBWfarmssq); // kernelsq calculates kernel based on distance squared
+//			double compSus = cf->Farm::get_sus(); // susceptible farm in comparison cell
+//
+//			// calculate probability between these specific farms
+//			double ptrue = oneMinusExp(-focalInf * compSus * kernelBWfarms * p->days_per_timestep); // prob tx between this farm pair
+//			if (random <= ptrue){ // actual infection
+//if(verbose>1){std::cout << "Infection @ distance: "<< std::sqrt(distBWfarmssq)/1000 << " km, prob "<<ptrue<<std::endl;}
+//					fcexp.emplace_back(cf);
+//			}
+//		}
+//	}
+//	fcexp.swap(output);
+//}

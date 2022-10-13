@@ -1,6 +1,9 @@
-Changelog for USDOS code associated with Tsao et al. (2019) Interface Focus
+Changelog for USDOS 
 
-v2.2: Initial release
+v2.0: Initial release for code associated with Tsao et al. (2019) Interface Focus
 
-v2.2.1 (current)
+v2.0.1 (current)
 -Removed dependency on old Alias_table class
+
+
+v2.1: Initial release for code associated with Gilbertson et al. (2022) Life

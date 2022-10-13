@@ -1,41 +1,79 @@
 #include "Status_manager.h"
+#include "shared_functions.h"
+
+#include <algorithm>
 
 /// Establishes sequences of statuses for disease, file status, and control statuses.
 /// Sets seed farm(s) as exposed, using index reporting time for reporting.
 Status_manager::Status_manager(std::vector<Farm*>& focalFarms, const Parameters* parameters,
-	Grid_manager* grid, Control_manager* control) :
+	Grid_manager* grid, Control_manager* control, Diagnostic_manager* diagnostic) :
 		seededFarms(focalFarms), // saved for output
 		parameters(parameters),
 		controlManager(control),
+		diagnosticManager(diagnostic),
 		gridManager(grid),
     allPrems(grid->get_allFarms()),
-    allCounties(grid->get_allCounties()),
+    allCounties(grid->get_allCountiesMap()),
     allStates(grid->get_allStates()),
     allControlTypes(control->get_controlTypes()),
     controlResources(control->get_controlResources()),
     controlReleaseSchedule(control->get_resourceBoostSchedule()),
+    allDiagnosticTypes(diagnostic->get_diagnosticTypes()),
+    diagnosticResources(diagnostic->get_diagnosticResources()),
     recentNotSus(0),
     pastEndTime(std::make_tuple(parameters->timesteps+100, 0)),
     nPrems(allPrems->size()),
     species(parameters->species) // store species for formatting later
 {
 	verbose = verboseLevel;
+	btb_slaughter_ofn = parameters->batchDateTime + "_slaughter.txt";
+
 
 	// Specify duration of each disease status and what follows
-	statusShift exp {parameters->latencyParams, "inf"};
-	statusSequences["exp"] = exp;
+	if(parameters->infectionType == InfectionType::FMD)
+    {
+        statusShift exp {parameters->latencyParams, "inf"};
+        statusSequences["exp"] = exp;
 
-	statusShift inf {parameters->infectiousParams, "imm"};
-	statusSequences["inf"] = inf;
+        statusShift inf {parameters->infectiousParams, "imm"};
+        statusSequences["inf"] = inf;
 
-	statusShift imm {pastEndTime, "NA"};
-	statusSequences["imm"] = imm;
+        statusShift imm {pastEndTime, "NA"};
+        statusSequences["imm"] = imm;
+    }
+    else if(parameters->infectionType == InfectionType::BTB)
+    {
+        statusShift btb {pastEndTime, "rec"}; //Affected by btb, doesn't enxpire after a set amount of time, but when animals die off or are sent from the prem.
+        statusSequences["btb"] = btb;
+
+        statusShift rec {pastEndTime, "btb"}; //BTB ONLY. Recovered from btb, last infected animals were removed and the prem is back to being treated as susceptible.
+        statusSequences["rec"] = rec;
+    }
 
 	// set seed farms as exposed
-	for (auto& f:focalFarms){
-		set_status(f, 1, "exp", parameters->latencyParams); // "exp" = disease status exposed
-        //get farm id
+	for (auto& f:focalFarms)
+	{
         int fid = f->Farm::get_id();
+
+        if(parameters->infectionType == InfectionType::FMD)
+        {
+            set_status(f, 1, "exp", parameters->latencyParams); // "exp" = disease status exposed
+        }
+        else if(parameters->infectionType == InfectionType::BTB)
+        {
+            set_status(f, 1, "btb", pastEndTime);
+            Prem_status* seeded_pst = changedStatus.at(fid);
+            btb_n_freshly_infected_animals += seeded_pst->btb_seed();
+            //Guarantees that the seeded prem is recorded as infected, even if it recovers during the first time step.
+            //Won't save duplicate records since btb_all_infected is a set.
+            btb_all_infected.insert(seeded_pst);
+        }
+        else
+        {
+            std::cout << "Unknown type of infection simulated." << std::endl;
+            exit(EXIT_FAILURE);
+        }
+
         //set exposure time for source farms
         //record exposedBy by itself
         //route is local spread
@@ -43,35 +81,73 @@ Status_manager::Status_manager(std::vector<Farm*>& focalFarms, const Parameters*
         changedStatus.at(fid)->Prem_status::add_exposureSource(1, f, 0, "none");
 	}
 
-	if (parameters->control_on == true){
-		statusShift exposed {pastEndTime, "reported"};
-		// End times for fileStatus 'exposed' differs depending on dangerousContact status, handled in expose() and set_status(). pastEndTime put in as placeholder.
-		statusSequences["exposed"] = exposed;
-		statusShift reported {pastEndTime, "NA"}; // 'reported' status is permanent
-		statusSequences["reported"] = reported;
+	//the status shift sequence is only for things that are controlled only by a time delay
+	if (parameters->control_on == true || parameters->diagnostic_on == true){
+			if (parameters-> testSuspects_on == false){
+				statusShift exposed {pastEndTime, "reported"};
+			// End times for fileStatus 'exposed' differs depending on dangerousContact status, handled in expose() and set_status(). pastEndTime put in as placeholder.
+			statusSequences["exposed"] = exposed;
+			statusShift reported {pastEndTime, "NA"}; // 'reported' status is permanent
+			statusSequences["reported"] = reported;
+		 }else if (parameters-> testSuspects_on == true){
+			statusShift exposed {pastEndTime, "suspected"};
+			// End times for fileStatus 'exposed' differs depending on dangerousContact status, handled in expose() and set_status(). pastEndTime put in as placeholder.
+			statusSequences["exposed"] = exposed;
+			statusShift suspected {pastEndTime, "NA"}; // 'reported' status is permanent
+			statusSequences["suspected"] = suspected;
+			}
+		}
+		if (parameters->diagnostic_on == true){
+			for (auto& dt:(parameters->diagnosticTypes)){
+				std::string d_type = dt;
+				//statusShift exposed {pastEndTime, "suspected"};
+				// End times for fileStatus 'exposed' differs depending on dangerousContact status, handled in expose() and set_status(). pastEndTime put in as placeholder.
 
-		// Specify duration of each control status and what follows
-		for (auto& ct:(parameters->controlTypes)){
-			std::string c_type = ct;
+				statusShift started {parameters->testStartToCompleteLag.at(d_type), "complete."+d_type};
+				statusSequences["started."+d_type] = started;
 
-			statusShift implemented {parameters->implementToEffectiveLag.at(c_type), "effective."+c_type};
-			statusSequences["implemented."+c_type] = implemented;
+				statusShift complete {pastEndTime, "reported"};
+				statusSequences["complete."+d_type] = complete;
 
-			statusShift effective {parameters->effectiveToInactiveLag.at(c_type), "inactive."+c_type};
-			statusSequences["effective."+c_type] = effective;
-
-			statusShift inactive {pastEndTime, "NA"};
-			statusSequences["inactive."+c_type] = inactive;
+				statusShift reported {pastEndTime, "NA"};
+				statusSequences["reported"] = reported;
+			}
 		}
 
-		// set seed farms as exposed (fileStatus), for reporting
-		std::tuple<double, double> iReport = parameters->indexReportLag;
-		for (auto& f:focalFarms){
-			int indexReportTime = normDelay(iReport); // current time + index report delay
-			std::tuple<double, double> indexReportTuple = std::make_tuple(indexReportTime, 0);
-			set_status(f, 1, "exposed", indexReportTuple); // file status
+			// Specify duration of each control status and what follows
+		if (parameters->control_on == true){
+			for (auto& ct:(parameters->controlTypes)){
+				std::string c_type = ct;
+
+				statusShift implemented {parameters->implementToEffectiveLag.at(c_type), "effective."+c_type};
+				statusSequences["implemented."+c_type] = implemented;
+
+				statusShift effective {parameters->effectiveToInactiveLag.at(c_type), "inactive."+c_type};
+				statusSequences["effective."+c_type] = effective;
+
+				statusShift inactive {pastEndTime, "NA"};
+				statusSequences["inactive."+c_type] = inactive;
+
+			}
 		}
-	}
+
+        if (parameters->testSuspects_on == false){
+            // set seed farms as exposed (fileStatus), for reporting
+            std::tuple<double, double> iReport = parameters->indexReportLag;
+            for (auto& f:focalFarms){
+                int indexReportTime = normDelay(iReport); // current time + index report delay
+                std::tuple<double, double> indexReportTuple = std::make_tuple(indexReportTime, 0);
+                set_status(f, 1, "exposed", indexReportTuple); // file status
+            }
+        }else if (parameters->testSuspects_on == true){
+                // set seed farms as exposed (fileStatus), for suspecting
+                std::tuple<double, double> iSuspect = parameters->indexSuspectLag;
+                for (auto& f:focalFarms){
+                    int indexSuspectTime = normDelay(iSuspect); // current time + index report delay
+                    std::tuple<double, double> indexSuspectTuple = std::make_tuple(indexSuspectTime, 0);
+                    set_status(f, 1, "exposed", indexSuspectTuple); // file status
+            }
+        }
 
 if (verbose>1){
 	std::cout<<focalFarms.size()<<" exposed premises initiated. End times for exposed premises: "<<std::endl;
@@ -91,6 +167,10 @@ Status_manager::~Status_manager()
 	for (auto& f:changedStatus){delete f.second;}
 	for (auto& c:changedCoStatus){delete c.second;}
 	for (auto& c:changedStateStatus){delete c.second;}
+	if(btb_slaughter_ofs.is_open())
+    {
+        btb_slaughter_ofs.close();
+    }
 }
 
 /// Checks if a Prem_status exists for a premises and creates one if not. Returns
@@ -130,8 +210,14 @@ void Status_manager::add_premSource(int t, Farm* toBeExposed, Farm* exposedBy,
 void Status_manager::set_status(Farm* f, int startTime, std::string status,
 	std::tuple<double,double> statusDuration, std::tuple<double, double> controlEffect)
 {
-	int fid = verify_premStatus(f);
 
+	int fid = verify_premStatus(f);
+	Prem_status* pst = changedStatus.at(fid);
+
+    if(status == "started")
+    {
+        std::cout << "sdd" << std::endl;
+    }
 	// if lag time = 0, use next status & duration instead
 	while (std::get<0>(statusDuration) == 0){
 		if (statusSequences.at(status).next.compare("NA")!=0){ // if there is a next status
@@ -147,9 +233,9 @@ if(verbose>1){std::cout<<"SM::set_status: Setting "<<fid<<" status to ";}
 
 	// if status is a disease status:
 	if (status.compare("exp")==0 ||
-			status.compare("inf")==0 ||
-			status.compare("imm")==0){
-
+        status.compare("inf")==0 ||
+        status.compare("imm")==0)
+    {
 		if(verbose>1){std::cout<<status<<" (disease status)"<<std::endl;}
 
 		changedStatus.at(fid)->Prem_status::set_diseaseStatus(status);
@@ -157,19 +243,46 @@ if(verbose>1){std::cout<<"SM::set_status: Setting "<<fid<<" status to ";}
 		if (diseaseStatuses.count(status)==0){
 			diseaseStatuses[status].lo = 0; // set placeholder at beginning
 		}
-		diseaseStatuses.at(status).units.emplace_back(changedStatus.at(fid));
+        diseaseStatuses.at(status).units.emplace_back(changedStatus.at(fid));
 
 		if (status.compare("exp")==0){ // if farm is becoming exposed
 			notSus.emplace_back(allPrems->at(fid)); // add to list of non-susceptibles
 		}
 
-	// if status is a file status (applies to all types of control):
-	// other fileStatus: notDangerousContact
-	} else if (status.compare("dangerousContact")==0 ||
-						 status.compare("exposed")==0 ||
-						 status.compare("reported")==0){
+	} else if (status.compare("btb")==0 ||
+               status.compare("rec")==0)
+    {
+	    pst->Prem_status::set_diseaseStatus(status);
+		// add to appropriate statusList
+		if (diseaseStatuses.count(status)==0){
+			diseaseStatuses[status].lo = 0; // set placeholder at beginning
+		}
+		//Premises can be exposed multiple times with bTB, but only one prem status
+		//pointer should be added here even if the prem is exposed multiple times.
+		//This doesn't happen for FMD since an exposed/inf prem can't be infected again,
+		//so check if any of the pointers in diseaseStatuses.at(status) is equal to
+		//this premises' prem_status pointer.
+		if(std::none_of(diseaseStatuses.at(status).units.begin(),
+                        diseaseStatuses.at(status).units.end(),
+                        [pst](Prem_status* pst_comp) { return pst==pst_comp; }))
+        {
+            diseaseStatuses.at(status).units.emplace_back(pst);
+        }
 
-		if(verbose>1){std::cout<<status<<" (file status)"<<std::endl;}
+        //When simulating btb, we don't want premises to be removed from the premises that potentially
+        //can be exposed just because they get exposed once - they can be exposed multiple times.
+//		if (status.compare("btb") == 0){ // if farm is becoming exposed
+//			notSus.emplace_back(allPrems->at(fid)); // add to list of non-susceptibles
+//		}
+    // if status is a file status (applies to all types of control):
+	// other fileStatus: notDangerousContact
+	}  if (status.compare("dangerousContact")==0 ||
+           status.compare("exposed")==0 ||
+           status.compare("suspected")==0 ||
+           status.compare("reported")==0)
+    {
+		if(verbose>1)
+			{std::cout<<status<<" (file status)"<<std::endl;}
 
 		changedStatus.at(fid)->Prem_status::set_fileStatus(status);
 		// add to appropriate file-status list
@@ -178,28 +291,35 @@ if(verbose>1){std::cout<<"SM::set_status: Setting "<<fid<<" status to ";}
 		}
 		fileStatuses.at(status).units.emplace_back(changedStatus.at(fid));
 
+		if (status.compare("suspected")==0){
+			newPremSuspects.emplace_back(changedStatus.at(fid));
+		}
 		if (status.compare("reported")==0){
 			newPremReports.emplace_back(changedStatus.at(fid));
 			if (parameters->dangerousContacts_on==1){
 				// determine which of potential dangerous contacts will be dangerous contacts
-				std::unordered_map<Farm*, std::unordered_map<std::string, bool>> pDCs =
+				std::unordered_map<Farm*, std::vector<bool>> pDCs =
 					*(changedStatus.at(fid)->Prem_status::get_potentialDCs());
-if(verbose>1 && pDCs.size()>0){std::cout<<"SM::Reported farm has "<<pDCs.size()<<" potential DCs"<<std::endl;}
+//if(verbose>1 && pDCs.size()>0){
+	std::cout<<"SM::Reported farm has "<<pDCs.size()<<" potential DCs"<<std::endl;//}
 				for (auto& dc:pDCs){ // dc.first is prem to evaluated as DC
-
+if (verbose>1)std::cout<<"SM::set_status inside loop over DCs"<<std::endl;
 if (verbose>1){std::cout<<dc.first->Farm::get_id()<<" is DC/reported? "<<getAny_fileStatus(dc.first)<<std::endl;}
 					if (getAny_fileStatus(dc.first).compare("dangerousContact")!=0 ||
-						getAny_fileStatus(dc.first).compare("reported")!=0){ // if not already reported or already a DC
+						//getAny_fileStatus(dc.first).compare("suspected")!=0 ||
+						getAny_fileStatus(dc.first).compare("reported")!=0){ // if not already suspected, reported or already a DC
 
 						// get current disease status
-						std::string dcDiseaseStatus = getAny_diseaseStatus(dc.first);
+						std::string dcDiseaseStatusStr = getAny_diseaseStatus(dc.first);
+						DiseaseStatus dcDiseaseStatus = parameters->StringToDiseaseStatus.at(dcDiseaseStatusStr);
+						int status_idx = static_cast<int>(dcDiseaseStatus);
 
 						// determine if dc should be dangerousContact
-						if (dc.second.count(dcDiseaseStatus)>0){ // dc.second is map with index status, value bool
-							bool isDC = dc.second.at(dcDiseaseStatus);
-	if(verbose>1){std::cout<<"SM::set_status: potential DC "<<dc.first->Farm::get_id()<<" disease status = "<<dcDiseaseStatus<<", isDC = "<<isDC<<std::endl;}
+						if (dc.second.at(status_idx)){ // dc.second is a vector of bools
+							bool isDC = dc.second.at(status_idx);
+	if(verbose>1){std::cout<<"SM::set_status: potential DC "<<dc.first->Farm::get_id()<<" disease status = "<<dcDiseaseStatusStr<<", isDC = "<<isDC<<std::endl;}
 							bool sourceIsF = 1; // assume source is reported farm unless changed...
-							if (dcDiseaseStatus.compare("sus")!=0){ // if not susceptible, was it exposed by a different farm?
+							if (dcDiseaseStatus != DiseaseStatus::SUS and dcDiseaseStatus != DiseaseStatus::REC){ // if not susceptible, was it exposed by a different farm?
 								sourceIsF = changedStatus.at(dc.first->Farm::get_id())->Prem_status::is_exposureSource(f);
 							}
 	if(verbose>1){std::cout<<"SM::set_status: potential DC "<<dc.first->Farm::get_id()<<"'s source is reported farm? "<<sourceIsF<<std::endl;}
@@ -217,6 +337,74 @@ if (verbose>1){std::cout<<dc.first->Farm::get_id()<<" is DC/reported? "<<getAny_
 		} // end "if being reported now"
 	}
 
+    // if status is a diagnostic status (specific to each premises-level diagnostic type):
+    if (// first n letters of status are:
+        status.compare(0,7,"started")==0 ||
+        status.compare(0,8,"complete")==0)
+    {
+
+        if(verbose>1)
+        {
+            std::cout<<status<<" (diagnostic status)"<<std::endl;
+        }
+        changedStatus.at(fid)->Prem_status::set_diagnosticStatus(status);
+
+
+        // add to appropriate diagnostic-status list
+        if (diagnosticStatuses.count(status)==0)
+        {
+            diagnosticStatuses[status].lo = 0; // set placeholder at beginning
+        }
+        diagnosticStatuses.at(status).units.emplace_back(changedStatus.at(fid));
+
+
+        // get the diagnostic type at the end of the status string
+        std::string d_type = status;
+        d_type.replace(0, d_type.find(".")+1, "");
+        //std::tuple<double, double> sensitivity = allDiagnosticTypes->at(d_type)->sensitivity;
+
+
+        if(status.compare(0,8,"complete")==0)
+        {
+
+            int fid = f->Farm::get_id();
+            //Ugly fix here. If Lag between testing and test complete is zero, as it likely will be for btb since the timestep is 1 month,
+            //the actual started status will be skipped due to how this function is constructed (skips past all statuses with duration 0).
+            //Since the code that actually performs the test happens after the "started" status of this prem has been skipped
+            //it will never be executed if lag = 0, and no farm will be tested.
+            //To get around that I've made this fix that if simulating btb and lag is 0 will do the test here instead, once
+            //the test is considered completed - meaning during the same timestep that it got started. I think this works, assuming
+            //that the test is never also performed outside of here.
+            if(parameters->infectionType == InfectionType::BTB and
+               std::get<0>(parameters->testStartToCompleteLag.at(d_type)) == 0)
+            {
+                bool testPositive = eval_probHerdPositive(f, -1, -1, d_type); //Second parameter is current timestep and third is current quarter, but they are only used inside eval_probHerdPositive if simulating FMD so can be set to -1 for bTB.
+                pst->Prem_status::add_testResult(d_type, 0);
+
+                if(testPositive == 0){
+                    if (verbose>1){std::cout<<"Diagnostic test: negative"<<std::endl;}
+                    pst->Prem_status::add_testResult(d_type, 0);
+                }else if(testPositive == 1){
+                    if (verbose>1){std::cout<<"Diagnostic test: positive"<<std::endl;}
+                    pst->Prem_status::add_testResult(d_type, 1);
+                }
+            }
+
+            //Here the function is resumed as usual, so if simulating FMD, or BTB with lag > 0, things should work as before.
+            if (getAny_fileStatus(f).compare("reported") != 0)
+            {
+                int diagRes =  changedStatus.at(fid)->Prem_status::get_testResult(d_type);
+                if (diagRes == 1)
+                {
+                    set_status(f,startTime,"reported", pastEndTime);
+                }
+                else if(diagRes != 1 and parameters->infectionType == InfectionType::BTB)
+                {
+                    set_status(f,startTime,"exposed", pastEndTime);
+                }
+            }
+        }
+    }
 
 	// if status is a control status (specific to each premises-level control type):
 	if (// first n letters of status are:
@@ -231,6 +419,7 @@ if (verbose>1){std::cout<<dc.first->Farm::get_id()<<" is DC/reported? "<<getAny_
 			controlStatuses[status].lo = 0; // set placeholder at beginning
 		}
 		controlStatuses.at(status).units.emplace_back(changedStatus.at(fid));
+
 		// get the control type at the end of the status string
 		std::string c_type = status;
 		c_type.replace(0, c_type.find(".")+1, "");
@@ -239,6 +428,7 @@ if (verbose>1){std::cout<<dc.first->Farm::get_id()<<" is DC/reported? "<<getAny_
 		if (status.compare(0,9,"effective")==0) {
             changedStatus.at(fid)->Prem_status::add_controlStatus(c_type); // used in detailed output when tx/exp prevented
             if(c_type == "vax"){
+				newPremVaxs.emplace_back(changedStatus.at(fid));
                 changedStatus.at(fid)->vaccinate(std::get<0>(effectiveness)); //For vaccination "effectiveness" is the vaccine efficacy on the animal level and is stored in element 0 of the effectiveness tuple.
                 changedStatus.at(fid)->Prem_status::add_probPreventExposure(0.0); //For vaccination the prevention is not applied as for prem-level control strategies.
                 changedStatus.at(fid)->Prem_status::add_probPreventTransmission(0.0);
@@ -255,8 +445,14 @@ if (verbose>1){std::cout<<dc.first->Farm::get_id()<<" is DC/reported? "<<getAny_
 				changedStatus.at(fid)->Prem_status::rem_probPreventExposure(std::get<0>(effectiveness));
 				changedStatus.at(fid)->Prem_status::rem_probPreventTransmission(std::get<1>(effectiveness));
 		    }
+            //If btb is being simulated, the prem returns to being susceptible once the control "wears off".
+            if(parameters->infectionType == InfectionType::BTB){
+                    pst->btb_remove_all_infected();
+                    set_status(pst, startTime, "btb", std::make_tuple<double, double>(startTime+1, 0));
+            }
 		}
 	}
+
 
 	// set start and end times
 	changedStatus.at(fid)->Prem_status::set_start(status,startTime);
@@ -337,45 +533,69 @@ void Status_manager::set_regionStatus(std::string id, std::string regionType, in
 
 }
 
-/// "Removes" expires farms with a given status and if applicable, sets next status.
+/// "Removes" expired farms with a given status and if applicable, sets next status.
 /// \param[in] t Current timestep, used to determine if statuses have expired and set next status
 /// \param[in] inStatus statusList containing vector of farms and integer placeholder
 /// \param[in] status Status that applies to inStatusList
 void Status_manager::update(int t, std::string status, statusList<Prem_status*>& inStatusList)
 {
-	// check from iterator "lo" to end, switch expired farms to before "lo"
-	if (inStatusList.lo < inStatusList.units.size()){ // not all farms have expired
-		std::vector<Prem_status*>::iterator lo_it = inStatusList.units.begin();
-		std::advance(lo_it, inStatusList.lo); // move iterator to lo
 
-		for (auto it = lo_it; it < inStatusList.units.end(); it++){ // check each farm* between lo and end
-				if ( (*it)->Prem_status::get_end(status) == t ){ // if validity of this status expires for this farm today
-				// set to next status
+    // check from iterator "lo" to end, switch expired farms to before "lo"
+    if (inStatusList.lo < inStatusList.units.size())  // not all farms have expired
+    {
+        std::vector<Prem_status*>::iterator lo_it = inStatusList.units.begin();
+        std::advance(lo_it, inStatusList.lo); // move iterator to lo
 
-				if (status.compare("exposed")==0){ // specific to file status, not disease
-				// report and add to waitlist for each control type
-					//If we want to add a coin test to determine whether an exposed farm will be reported, then add here
-					if(get_totalPremsWithFileStatus("reported")<1){
-						firstRepTime = t; //if the number of reporteds is less than 1 then record the first reported time.
+        for (auto it = lo_it; it < inStatusList.units.end(); it++)  // check each farm* between lo and end
+        {
+            if ( (*it)->Prem_status::get_end(status) == t )  // if validity of this status expires for this farm today
+            {
+                // set to next status
+                if (status.compare("exposed")==0 && parameters->testSuspects_on == false)  // specific to file status, not disease
+                {
+                    // report and add to waitlist for each control type
+                    //If we want to add a coin test to determine whether an exposed farm will be reported, then add here
+                    if(get_totalPremsWithFileStatus("reported")<1)
+                    {
+                        firstRepTime = t; //if the number of reporteds is less than 1 then record the first reported time.
 
-						if(verbose>1){
-					std::cout << "SM:: First report time recorded as"<< firstRepTime << std::endl;
-						}
-					}
-					set_status(*it, t, "reported", pastEndTime); // in expose(), status was set to expire at report lag
-					report_countyAndState(*it, t); // also report at county and state level
-				} else if (statusSequences.count(status)>0){ // if this status is auto-advanced to another status
-					std::string nextStatus = statusSequences.at(status).next;
-					std::tuple<double, double> statusDuration= statusSequences.at(nextStatus).duration;
-					set_status(*it, t, nextStatus, statusDuration);
-				}
+                        if(verbose>1)
+                        {
+                            std::cout << "SM:: First report time recorded as "<< firstRepTime << std::endl;
+                        }
+                    }
+                    report_countyAndState(*it, t); // also report at county and state level
+                }
+                else if (status.compare(0,7,"started")==0 && parameters->testSuspects_on == true)    // specific to file status, not disease
+                {
+                    // report and add to waitlist for each control type
+                    //If we want to add a coin test to determine whether an exposed farm will be reported, then add here
+                    if(get_totalPremsWithFileStatus("reported")<1)
+                    {
+                        firstRepTime = t; //if the number of reporteds is less than 1 then record the first reported time.
+                        if(verbose>1)
+                        {
+                            std::cout << "SM:: First report time recorded as "<< firstRepTime << std::endl;
+                        }
+                    }
+                    report_countyAndState(*it, t); // also report at county and state level
+                }
 
-				std::iter_swap(lo_it, it); // switch expired farm into low position
-				lo_it++; // shift lo placemarker forward
-				inStatusList.lo++; // update stored integer to match lo_it position (as integer)
-				}
-		}
-	} // end "if there are farms in list that haven't expired"
+                if (statusSequences.count(status)>0)  // if this status is auto-advanced to another status
+                {
+                    std::string nextStatus = statusSequences.at(status).next;
+                    std::tuple<double, double> statusDuration= statusSequences.at(nextStatus).duration;
+                    set_status(*it, t, nextStatus, statusDuration);
+                }
+
+
+                std::iter_swap(lo_it, it); // switch expired farm into low position
+                lo_it++; // shift lo placemarker forward
+                inStatusList.lo++; // update stored integer to match lo_it position (as integer)
+            }
+
+        }
+    } // end "if there are farms in list that haven't expired"
 
 }
 
@@ -423,6 +643,19 @@ void Status_manager::updateDisease(int t)
 	// 'imm' is a permanent status
 }
 
+
+/// Update file and diagnostics statuses (wrapper for update() function)
+/// \param[in] t Timestep
+void Status_manager::updateFile(int t)
+{
+	// 'sus'->'exposed' transition determined by local spread, shipping, +control
+	if (fileStatuses.count("exposed")>0){
+		update(t, "exposed", fileStatuses.at("exposed")); // any 'exposed' expiring -> reported+waitlisted
+	}
+	// 'reported' is a permanent status, no updates performe
+}
+
+
 /// Check time for time dependent resource boost (i.e. for additional vaccine doses)
 void Status_manager::update_ControlResources(int t)
 {
@@ -460,12 +693,6 @@ void Status_manager::update_ControlResources(int t)
 /// \param[in] t Timestep
 void Status_manager::updateControl(int t)
 {
-	// 'sus'->'exposed' transition determined by local spread, shipping, +control
-	if (fileStatuses.count("exposed")>0){
-		update(t, "exposed", fileStatuses.at("exposed")); // any 'exposed' expiring -> reported+waitlisted
-	}
-	// 'reported' is a permanent status, no updates performed
-
 	// update control statuses
 	for (auto& ct:*allControlTypes){ // should be all control types, including regional
 		// 'waitlisted' & 'implemented' transitions determined by controlRules, constraints
@@ -484,6 +711,308 @@ void Status_manager::updateControl(int t)
 
 }
 
+
+/// Update file and diagnostics statuses (wrapper for update() function)
+/// \param[in] t Timestep
+void Status_manager::updateDiagnostics(int t)
+{
+	// update diagnostic statuses
+	for (auto& dt:*allDiagnosticTypes){ // should be all diagnostic types
+		if (diagnosticStatuses.count("started."+dt.first)>0){
+			update(t, "started."+dt.first, diagnosticStatuses.at("started."+dt.first)); // any 'started' expiring -> 'complete'
+		}
+		if (diagnosticStatuses.count("complete."+dt.first)>0){
+			update(t, "complete."+dt.first, diagnosticStatuses.at("complete."+dt.first)); // any 'started' expiring -> 'complete'
+		}
+	}
+
+}
+
+///Evaluate the diagnostic test and save the positive or negative result to Prem_Status
+/// \parm[in] t Timestep
+void Status_manager::eval_testResult(int t, int quarter_idx){
+
+	for (auto& dt:toTest){ // should be all diagnostic types
+		if(dt.second.size()>0){
+		std::string d_type = dt.first;
+		std::vector<Farm*> toTest;
+
+
+		for (auto& f:dt.second){
+			bool testPositive = eval_probHerdPositive(f, t, quarter_idx, d_type);
+			int fid = f->Farm::get_id();
+
+			changedStatus.at(fid)->Prem_status::add_testResult(d_type, 0);
+
+			if(testPositive == 0){
+				if (verbose>1){std::cout<<"Diagnostic test: negative"<<std::endl;}
+				changedStatus.at(fid)->Prem_status::add_testResult(d_type, 0);
+			}else if(testPositive == 1){
+				if (verbose>1){std::cout<<"Diagnostic test: positive"<<std::endl;}
+				changedStatus.at(fid)->Prem_status::add_testResult(d_type, 1);
+
+			}
+		}
+	}
+  }
+}
+
+/// Stochastically determines if the diagnostic test is positive or negative at a given premises.
+/// Returns 'true' if test is positive, 'false' if it is not.
+/// \param[in] farm id
+bool Status_manager::eval_probHerdPositive(Farm* f, int t, int quarter_idx, std::string d_type){
+	bool output = false; // by default assume test is negative
+    int fid = f->Farm::get_id();
+    if (changedStatus.count(fid)>0)//Diagnostics begun on focal farm but not complete
+    {
+
+		std::tuple<double, double> sens = allDiagnosticTypes->at(d_type)->sensitivity;
+
+			if(parameters->infectionType == InfectionType::FMD &&
+               (changedStatus.at(fid)->Prem_status::get_diseaseStatus()=="inf" ||
+                changedStatus.at(fid)->Prem_status::get_diseaseStatus()=="exp" ||
+				changedStatus.at(fid)->Prem_status::get_diseaseStatus()=="imm"))
+            {
+                double n = 0;
+                if(parameters->partial==1){
+                     n = changedStatus.at(fid)->Prem_status::get_inf_partial_as_vaccinated(t, quarter_idx, parameters, this->get_normInf_map()); //Returns the number of unvaccinated infectious animals. If vaccine hasn't been deployed, the number of unvaccinated animals equals total herd size.
+                } else if (parameters->partial==0){
+                     n = changedStatus.at(fid)->Farm::get_size_allSpecies();
+                }
+
+				double betaDraw = draw_beta(std::get<0>(sens), std::get<1>(sens));
+				double bracket =1-betaDraw;
+				double probNCatNeg = pow(bracket, n);
+				double probHerdPositive = 1-probNCatNeg;
+		 		double random = uniform_rand();
+		 		if (random < probHerdPositive)
+                {
+		 			output = true;
+		 		}
+		 	}
+		 	else if(parameters->infectionType == InfectionType::BTB &&
+                    changedStatus.at(fid)->Prem_status::get_diseaseStatus()=="btb")
+            {
+                int n_infected = changedStatus.at(fid)->btb_get_N_infected();
+                double betaDraw = draw_beta(std::get<0>(sens), std::get<1>(sens));
+				int n_positive = draw_binom(n_infected, betaDraw);
+		 		if (n_positive > 0)
+                {
+		 			output = true;
+		 		}
+            }
+            else //diseaseStatus == "sus"
+            {
+                if (verbose>1){std::cout<<"SM: eval_probHerdPositive no test evaluation performed, farm is susceptible"<<std::endl;}
+                output = false;
+            }
+
+	}
+	return output;
+}
+
+void Status_manager::eval_slaughterSurveillance(int t, int quarter_idx, int replicate, std::vector<Farm*>prems)
+{
+    if(!btb_slaughter_ofs.is_open())
+    {
+        btb_slaughter_ofs.open(btb_slaughter_ofn, std::ios::app);
+        if(!btb_slaughter_ofs){std::cout << "Failed to open " << btb_slaughter_ofn << std::endl; exit(EXIT_FAILURE);}
+        //Write the header.
+        if(replicate == 1)
+        {
+            btb_slaughter_ofs << "replicate" << "\t" << "timestep" << "\t" << "oPremId" << "\t" << "oCommodity" << "\t" << "oPremClass" << "\t"
+                              << "oPremSize" << "\t" << "oPremNInf" << "\t" << "nToSlaughter" << "\t" << "nInfToSlaughter" << "\t"
+                              << "nDetectableLesions" << "\t" << "nInfAnimalsDetected" << "\t" << "tracebackSuccessful" << "\t" << "facilityId" << "\t"
+                              << "infectionTracedTo" << std::endl;
+        }
+    }
+    for(Farm* f : prems)
+    {
+        Prem_status* pst = changedStatus.at(f->get_id());
+        if(pst->get_fileStatus() == "reported")
+        {
+            //Reported prems don't sent to slaughter.
+            continue;
+        }
+        double slaughter_shipment_factor = f->get_slaughter_shipment_factor();
+        if(slaughter_shipment_factor < 0.0)
+        {
+            //Slaughter shipment factor hasn't been set yet and has the default value of -1.0.
+            slaughter_shipment_factor = gridManager->get_slaughter_shipment_factor(f->get_farm_type()->get_species(),
+                                                                                   f->get_prem_class()->tag,
+                                                                                   f->get_USAMMv3_unbinned_size());
+            f->set_slaughter_shipment_factor(slaughter_shipment_factor);
+        }
+
+        double slaughter_shipment_rate = f->get_shipment_rate() * slaughter_shipment_factor; //This is the monthly rate for this quarter.
+        if(slaughter_shipment_rate > 0.0)
+        {
+            int n_slaughter_shipments = draw_poisson(slaughter_shipment_rate); //Generate the number of slaughter shipmetns that occur this time step.
+            if(n_slaughter_shipments > 0)
+            {
+                double slaughter_fraction = f->get_yearly_slaughter_fraction();
+                if(slaughter_fraction < 0.0)
+                {
+                    //Slaughter fraction hasn't been set yet and has the default value of -1.0.
+                    slaughter_fraction = gridManager->get_slaughter_fraction(f->get_farm_type()->get_species(),
+                                                                             f->get_prem_class()->tag);
+                    f->set_yearly_slaughter_fraction(slaughter_fraction);
+                }
+
+                double yearly_sl_rate = slaughter_shipment_rate * 12; //This is also the expected number of yearly slaughter shipments given this quarter's monthly rate.
+                double fraction_per_sl_shipment = slaughter_fraction / yearly_sl_rate; //This is the expected proportion of the inventory that is sent to slaughter on each slaughter shipment given the quarter's shipping rate.
+
+
+                Prem_status* farm_triggered = nullptr;
+                for(int sl_shp_idx = 0; sl_shp_idx<n_slaughter_shipments; ++sl_shp_idx)
+                {
+                    int n_to_slaughter = 0;
+                    int n_infected = 0;
+                    int n_detectable_lesions = 0;
+                    int confirmed_inf_animals = 0;
+                    int traceback_successful = 0;
+                    int facility_id = -1;
+                    if(fraction_per_sl_shipment >= 1.0)
+                    {
+                        n_to_slaughter = f->get_size_allSpecies();
+                    }
+                    else
+                    {
+                        int premsize = f->get_size_allSpecies();
+                        if(premsize == 1)
+                        {
+                            n_to_slaughter = 1;
+                        }
+                        else
+                        {
+                            n_to_slaughter = 1 + draw_binom(f->get_size_allSpecies()-1, fraction_per_sl_shipment); //To prevent sending zero animals.
+                        }
+
+                    }
+
+                    n_infected = pst->btb_subtract_slaughter_shipment(n_to_slaughter); //Hypergeometric sample from the different infection stages.
+                    if(n_infected > 0)
+                    {
+                        //Determine how many lesions are detectable. Same probability regardless of facility.
+                        n_detectable_lesions = 0;
+                        for(int animal_i=0; animal_i<n_infected; ++animal_i)
+                        {
+                            double p_detectable = draw_beta(30, 10);
+                            if(uniform_rand() < p_detectable)
+                            {
+                                ++n_detectable_lesions;
+                            }
+                        }
+
+                        //Determine how many of the lesions are detected and submitted.
+                        if(n_detectable_lesions > 0)
+                        {
+                            //Get the destination slaughter facility.
+                            County* o_county = f->get_parent_county();
+                            if(!o_county->is_set_slaughter_probs())
+                            {
+                                int o_county_fips = o_county->get_fips_code();
+                                o_county->set_slaughter_probs(gridManager->get_slaughtershed_probabilities(o_county_fips),
+                                                              gridManager->get_slaughter_facility_ids());
+                            }
+                            facility_id = o_county->get_slaughter_destination();
+                            if(facility_id != -1)
+                            {
+                                //Now determine slaughter facility/chance of submitting a lesion and then if that lesion
+                                //tests positive and if so a traceback is successful.
+                                const std::vector<double>& alpha_beta = gridManager->get_slaughter_facility_alpha_beta(facility_id);
+                                confirmed_inf_animals = 0;
+                                for(int lesion_i=0; lesion_i<n_detectable_lesions; ++lesion_i)
+                                {
+                                    double p_detect = draw_beta(alpha_beta[0], alpha_beta[1]);//Draw one random probability for each animal checked.
+                                    if(uniform_rand() < p_detect)
+                                    {
+                                        //Lesion detected and submitted.
+                                        double p_test_positive = draw_beta(46, 5);
+                                        if(uniform_rand() < p_test_positive)
+                                        {
+                                            ++confirmed_inf_animals;
+                                        }
+                                    }
+                                }
+
+                                if(confirmed_inf_animals > 0)
+                                {
+                                    //At least one lesion tested positive for bTB, try to trace it back to the prem.
+                                    double p_traceback = draw_beta(45, 51);
+                                    if(uniform_rand() < p_traceback)
+                                    {
+                                        traceback_successful = 1;
+                                        if(pst->get_prem_class()->tag == "Frm")
+                                        {
+                                            //Infected prem found, trigger diagnostics measures.
+                                            farm_triggered = pst;
+                                        }
+                                        else
+                                        {
+                                            //It's not a farm, so look through the received shipments to see if
+                                            //a farm can be found.
+                                            farm_triggered = btb_make_trace(pst); //The prem was reported so make a trace in order to find the source.
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    int farm_triggered_id = -1;
+                    if(farm_triggered != nullptr and farm_triggered->get_prem_class()->tag == "Frm")
+                    {
+                        farm_triggered_id = farm_triggered->get_id();
+                    }
+
+                    //Print the slaughter shipment to file.
+                    std::string commodity = f->get_farm_type()->get_species();
+                    btb_slaughter_ofs << replicate << "\t"
+                                      << t << "\t"
+                                      << f->get_id() << "\t"
+                                      << commodity << "\t"
+                                      << f->get_prem_class()->tag << "\t"
+                                      << f->get_USAMMv3_unbinned_size() << "\t"
+                                      << pst->btb_get_N_infected() << "\t"
+                                      << n_to_slaughter << "\t"
+                                      << n_infected << "\t"
+                                      << n_detectable_lesions << "\t"
+                                      << confirmed_inf_animals << "\t"
+                                      << traceback_successful << "\t"
+                                      << facility_id << "\t"
+                                      << farm_triggered_id << std::endl;
+                    if(farm_triggered != nullptr and farm_triggered->get_prem_class()->tag == "Frm")
+                    {
+                        if(parameters->testSuspects_on)
+                        {
+                            set_status(farm_triggered, t, "suspected", std::make_tuple<double, double>(0.0, 0.0));
+                        }
+                        else
+                        {
+                            set_status(farm_triggered, t, "reported", pastEndTime);
+                        }
+
+                        break; //No need to test the rest of the slaughter shipments, diagnostics already triggered for this prem.
+                    }
+                }
+            }
+        }
+    }
+}
+
+void Status_manager::wipe_markets()
+{
+    for(auto& id_pst_pair : changedStatus)
+    {
+        Prem_status* pst = id_pst_pair.second;
+        if(pst->get_prem_class()->tag == "Mkt" and pst->get_diseaseStatus() == "btb")
+        {
+            pst->btb_remove_all_infected();
+        }
+    }
+}
+
 ///Stochastically determines if the vaccinated animals that are present on one or both
 ///of the premises suppress the transmission event. If the suppression is successful
 ///and transmission is prevented whichever of the boolean reference paramters that is
@@ -493,7 +1022,8 @@ void Status_manager::updateControl(int t)
 ///there is no easy way to determine which vaccinateion event prevented exposure and
 ///both transPrevented and expPrevented are set to true.
 void Status_manager::eval_premExpPrevByVaccination(Farm* ofarm, Farm* dfarm, double trueP, int t,
-                                                   bool& transPrevented, bool& expPrevented)
+                                                   int quarter_idx, bool& transPrevented,
+                                                   bool& expPrevented)
 {
     int ofid = ofarm->get_id();
     int dfid = dfarm->get_id();
@@ -540,16 +1070,16 @@ void Status_manager::eval_premExpPrevByVaccination(Farm* ofarm, Farm* dfarm, dou
     //Determine what to be used for infectiousness of the origin farm.
     double ofarm_inf_unvaxed; //Transmissibility of origin farm.
     double ofarm_inf_vaxed; //Transmissibility of origin farm using the susceptible parts of the herd when vaccination is in place.
-    double dfarm_sus_unvaxed = dfarm->get_sus(); //Same but susceptibility of destination farm. Will always be based on full pop regardless of partial transmission or not.
+    double dfarm_sus_unvaxed = dfarm->get_sus(quarter_idx); //Same but susceptibility of destination farm. Will always be based on full pop regardless of partial transmission or not.
     double dfarm_sus_vaxed = dfarm_sus_unvaxed;
-    auto& normInf_map = get_normInf_map();
-    auto& normSus_map = get_normSus_map();
+    auto& normInf_map = this->get_normInf_map();
+    auto& normSus_map = this->get_normSus_map();
     if(parameters->partial)
     {
-        ofarm_inf_unvaxed = opst->get_inf_partial_as_unvaccinated(t, parameters, gridManager->get_normInf_map());
+        ofarm_inf_unvaxed = opst->get_inf_partial_as_unvaccinated(t, quarter_idx, parameters, normInf_map);
         if(ofarm_isvaxed)
         {
-            ofarm_inf_vaxed = opst->get_inf_partial_as_vaccinated(t, parameters, gridManager->get_normInf_map());
+            ofarm_inf_vaxed = opst->get_inf_partial_as_vaccinated(t, quarter_idx, parameters, normInf_map);
         }
         else
         {
@@ -558,14 +1088,14 @@ void Status_manager::eval_premExpPrevByVaccination(Farm* ofarm, Farm* dfarm, dou
     }
     else
     {
-        ofarm_inf_unvaxed = opst->get_inf();
+        ofarm_inf_unvaxed = opst->get_inf(quarter_idx);
         ofarm_inf_vaxed = 0.0;
         for(const auto& sp_N_pair : opst->get_currentSizeUnvaccinated())
         {
             int N = sp_N_pair.second;
             if(N > 0)
             {
-                ofarm_inf_vaxed += normInf_map.at(sp_N_pair.first)  * std::pow(N, parameters->infExponents.at(sp_N_pair.first));
+                ofarm_inf_vaxed += normInf_map.at(sp_N_pair.first).at(quarter_idx)  * std::pow(N, parameters->infExponents.at(sp_N_pair.first));
             }
         }
     }
@@ -578,14 +1108,14 @@ void Status_manager::eval_premExpPrevByVaccination(Farm* ofarm, Farm* dfarm, dou
             int N = sp_N_pair.second;
             if(N > 0)
             {
-                dfarm_sus_vaxed += normSus_map.at(sp_N_pair.first)  * std::pow(N, parameters->susExponents.at(sp_N_pair.first));
+                dfarm_sus_vaxed += normSus_map.at(sp_N_pair.first).at(quarter_idx)  * std::pow(N, parameters->susExponents.at(sp_N_pair.first));
             }
         }
     }
 
     double original_rate = -std::log(-(trueP-1));
     double vaccinated_rate = original_rate * ( (ofarm_inf_vaxed * dfarm_sus_vaxed) / (ofarm_inf_unvaxed * dfarm_sus_unvaxed) );
-    double p_exp_vaccinated = 1 - std::exp(-vaccinated_rate); //This is the probability that the transmission event would have occurred with vaccinated animals.
+    double p_exp_vaccinated = oneMinusExp(-vaccinated_rate * parameters->days_per_timestep); //This is the probability that the transmission event would have occurred with vaccinated animals.
     double p_conditional = p_exp_vaccinated / trueP; //This is the probability that the transmission takes place between vaccinated herds given that it would have taken place with unvaccinated herds.
     double p_prevent = 1 - p_conditional; //This is the complement to the above (that the transmission does not take place between vaccinated herds given...).
 
@@ -628,7 +1158,7 @@ bool Status_manager::eval_premTransmission(Farm* f){
 	if (changedStatus.count(fid)>0){
 		double pNoTransmission = changedStatus.at(fid)->Prem_status::get_probPreventTransmission();
 		double random = uniform_rand();
-		if (random <= pNoTransmission){  // farm does not become exposed due to control
+		if (random < pNoTransmission){  // farm does not become exposed due to control
 			output = 0;
 		}
 	} // otherwise, farm has not had any status change, including control, so will be exposed
@@ -646,7 +1176,7 @@ bool Status_manager::eval_premExposure(Farm* f){
 	if (changedStatus.count(fid)>0){
 		double pNotExposed = changedStatus.at(fid)->Prem_status::get_probPreventExposure();
 		double random = uniform_rand();
-		if (random <= pNotExposed){  // farm does not become exposed due to control probability
+		if (random < pNotExposed){  // farm does not become exposed due to control probability
 			output = 0;
 		}
 	} // otherwise, farm has not had any status change, including control, so will be exposed
@@ -659,9 +1189,10 @@ bool Status_manager::eval_premExposure(Farm* f){
 /// evaluated for each exposure independently. If
 /// exposure is not prevented in at least one of those evaluations, the farm becomes exposed.
 /// \param[in] t Current timestep at which exposure/blocking events are reported
-void Status_manager::eval_exposure(int t)
+void Status_manager::eval_exposure(int t, int quarter_idx)
 // Exposures with sources of infection stored in expForEval
 {
+
 	int localCount = 0;
 	int shipCount = 0;
 	std::vector<std::pair<Farm*, int>> toExpose;
@@ -679,12 +1210,12 @@ void Status_manager::eval_exposure(int t)
                 Prem_status* origin_prem_status = changedStatus.at(origin->Farm::get_id());
                 if(origin_prem_status->get_diseaseStatus().compare("exp") == 0) //The origin farm is exposed and not infectious yet. The destination farm will inherit the origins' latency to infectiousness.
                 {
-                    latency_for_this_exposure = origin_prem_status->get_end("exp") - t; //Latency is inherited.
+                    latency_for_this_exposure = std::max(1, origin_prem_status->get_end("exp") - t); //Latency is inherited. Must never be 0 as the "exp" status is skipped over with bad consequences in the set_status if that's the case.
                 }
-//                else if(origin_prem_status->get_diseaseStatus().compare('inf') == 0) //Not sure if this should be a feature. Need to decide if bringing infectious animals onto a farm leads to instant infectiousness. /Stefan
-//                {
-//                    latency_for_this_exposure = 0; //Instant infectiousness.
-//                }
+                else if(origin_prem_status->get_diseaseStatus().compare("inf") == 0) //Not sure if this should be a feature. Need to decide if bringing infectious animals onto a farm leads to instant infectiousness. /Stefan
+                {
+                    latency_for_this_exposure = 1; //Instant infectiousness.
+                }
             }
             std::pair<Farm*, int> exp_pair = std::make_pair(destination, latency_for_this_exposure);
 			toExpose.emplace_back(exp_pair);
@@ -718,12 +1249,12 @@ void Status_manager::eval_exposure(int t)
             bool vaxPreventsExposure = false;
 			if(localTransmissionOccurs or localExposureOccurs) //No use if event is prevented by other means.
             {
-                eval_premExpPrevByVaccination(origin, destination, expP, t,
+                eval_premExpPrevByVaccination(origin, destination, expP, t, quarter_idx,
                                               vaxPreventsTransmission, vaxPreventsExposure);
             }
 
-            localTransmissionOccurs *= !vaxPreventsTransmission; //Multiplying bools is equivalent to multiplying ones and zeros (same as AND).
-            localExposureOccurs *= !vaxPreventsExposure;
+            localTransmissionOccurs = localTransmissionOccurs && !vaxPreventsTransmission; //Multiplying bools is equivalent to multiplying ones and zeros (same as AND).
+            localExposureOccurs = localExposureOccurs && !vaxPreventsExposure;
 
 			if (!localTransmissionOccurs){
 				if (verbose>1){std::cout<<"Transmission blocked."<<std::endl;}
@@ -745,10 +1276,10 @@ void Status_manager::eval_exposure(int t)
                     {
                         latency_for_this_exposure = origin_prem_status->get_end("exp") - t; //Latency is inherited.
                     }
-//                    else if(origin_prem_status->get_diseaseStatus().compare('inf') == 0) //Not sure if this should be a feature. Need to decide if bringing infectious animals onto a farm leads to instant infectiousness. /Stefan
-//                    {
-//                      latency_for_this_exposure = 0; //Instant infectiousness.
-//                    }
+                    else if(origin_prem_status->get_diseaseStatus().compare("inf") == 0) //Not sure if this should be a feature. Need to decide if bringing infectious animals onto a farm leads to instant infectiousness. /Stefan
+                    {
+                      latency_for_this_exposure = 0; //Instant infectiousness.
+                    }
                 }
                 std::pair<Farm*, int> exp_pair = std::make_pair(destination, latency_for_this_exposure);
 				toExpose.emplace_back(exp_pair);
@@ -778,12 +1309,21 @@ void Status_manager::filter_shipments(std::vector<Shipment*>& ships, int time)
 	for (auto& s:ships){
 	// fill in fields t, origin, destination
 		s->timestep = time; // set time of shipment
-		Farm* destination = allPrems->at(s->destID);
+		Farm* destination = s->dPrem;
 
 		// Only evaluate exposure and control if destination is susceptible
-		if (getAny_diseaseStatus(destination).compare("sus")==0){
-			Farm* origin = allPrems->at(s->origID);
+		if (getAny_diseaseStatus(destination).compare("sus")==0 or
+            getAny_diseaseStatus(destination).compare("btb")==0){
+			Farm* origin = s->oPrem;
 			bool exposeDestination = true; // default assumption, control will turn this off
+			if(parameters->market_shipment_exposure_prob < 1.0 and origin->get_prem_class()->tag == "Mkt")
+            {
+                if(uniform_rand() > parameters->market_shipment_exposure_prob)
+                {
+                    //This shipment wasn't infected. Just skip to next.
+                    continue;
+                }
+            }
 			// Exposure does NOT happen if shipping bans are effective and realized:
 			if (parameters->control_on == true && allControlTypes->count("shipBan")>0){
 				std::string county_fips = origin->Farm::get_parent_county()->Region::get_id();
@@ -793,7 +1333,7 @@ void Status_manager::filter_shipments(std::vector<Shipment*>& ships, int time)
 					double pBan = changedCoStatus.at(county_fips)->Region_status::get_probPreventExposure();
 					if (pBan > 0){ // county shipBan is effective
 						double random = uniform_rand();
-						if (random <= pBan){ // county shipBan is realized
+						if (random < pBan){ // county shipBan is realized
 							s->ban = 1;
 							exposeDestination = false;
 if(verbose>1){std::cout<<"SM::filter_shipments: Shipment prevented by ban"<<std::endl;}
@@ -803,7 +1343,7 @@ if(verbose>1){std::cout<<"SM::filter_shipments: Shipment prevented by ban"<<std:
 					double pBan = changedStateStatus.at(state)->Region_status::get_probPreventExposure();
 					if (pBan>0){ // state shipBan is effective
 						double random = uniform_rand();
-						if (random <= pBan){ // state shipBan is realized
+						if (random < pBan){ // state shipBan is realized
 							s->ban = 1;
 							exposeDestination = false;
 if(verbose>1){std::cout<<"SM::filter_shipments: Shipment prevented by ban"<<std::endl;}
@@ -824,7 +1364,7 @@ if(verbose>1){std::cout<<"SM::filter_shipments: Shipment prevented by ban"<<std:
 				add_premSource(time, destination, changedStatus.at(origin->Farm::get_id()), 1, "shipBan");
 			} else if (exposeDestination){ // control not on or not realized
 				// evaluate for prem-level control, exposure
-				add_premForEval(destination, origin, 1, 0.0); // stores info temporarily in Prem_status
+				add_premForEval(destination, origin, 1, 0.0, s); // stores info temporarily in Prem_status
 			}
 
 		} // end "if destination is susceptible"
@@ -853,18 +1393,28 @@ void Status_manager::expose(std::vector<std::pair<Farm*, int>>& farms, int t)
                 std::get<1>(latency_parameters) = 0.0; //...and variance to zero.
             }
 			set_status(f,t,"exp",latency_parameters); // disease status
-			if (parameters->control_on == true){
+			if (parameters->control_on == true || parameters->diagnostic_on == true){
 			// determine time to reporting based on dangerousContact status
+			  if (parameters->testSuspects_on == false){
 				if (getAny_fileStatus(f).compare("dangerousContact") == 0){
 					set_status(f,t,"exposed",parameters->dcReportLag); // altered report time for DCs
 				} else if (getAny_fileStatus(f).compare("notDangerousContact") == 0){
 					set_status(f,t,"exposed",parameters->nonDCReportLag);
 				}
-			} // end "if control on"
-
+			 } else if (parameters->testSuspects_on == true){
+			// determine time to reporting based on dangerousContact status
+				if (getAny_fileStatus(f).compare("notDangerousContact") == 0){
+					set_status(f,t,"exposed",parameters->nonDCSuspectLag);
+				} else if (getAny_fileStatus(f).compare("dangerousContact") == 0){
+					set_status(f,t,"exposed",parameters->dcSuspectLag);
+				}
+			}//end "if test suspects on"
+		}// end "if control on"
 		} // end "if farm is susceptible"
 	} // end "for each farm"
 }
+
+
 
 /// For a vector of given farms, reports the parent county and state.
 void Status_manager::report_countyAndState(Farm* f, int t)
@@ -931,6 +1481,7 @@ if(verbose>1){std::cout<<"File status of new waitlist member: "<<fileStatus<<std
 		}
 	}
 
+
 	// clear newly reported
 	newPremReports.clear();
 	newCoReports.clear();
@@ -947,6 +1498,58 @@ if (verbose >1){
 
 }
 
+/// Passes conditions about current status of outbreak (number of premises infected, etc)
+/// and checks if diagnostic rules indicate a diagnostic action should be triggered. Adds
+/// premises or regions to appropriate diagnoistic waitlists.
+void Status_manager::add_diagnosticWaitlistMembers(int t)
+{
+	//verbose >1 &&
+	if (newPremReports.size()+newPremSuspects.size()>0){
+	std::cout<<"SM::add_diagnosticWaitlistMembers: Checking for diagnostic triggers: "<<newPremReports.size()<<" new prem reports, "<<
+	newPremSuspects.size()<<" new prem suspects "<<newPremVaxs.size()<<" new prem vaxs"<<std::endl;
+	}
+		// statsForDiagnosticTriggers in Diagnostic_manager and waitlistGroup struct defined in Control_manager
+
+		statsForDiagnosticRules dStats{&newPremReports, &newPremSuspects, &newPremVaxs, t};
+		std::vector<diagnosticWaitlistGroup> dInstructions;
+		diagnosticManager->check_diagnosticRules(dStats, dInstructions); // writes waitlist info to instructions
+		// add to waitlist according to instructions
+		for (auto& i:dInstructions){
+			std::string diagnosticType = i.diagnosticType; //stays control because it is defined that way in Control_manager
+			std::string diagnosticScale = i.scaleType;
+			if (diagnosticScale.compare("premises")==0){
+				for (auto& f:i.premList){
+					int fid = verify_premStatus(f);
+					Prem_status* premToWL = changedStatus.at(fid);
+					bool alreadyDiagnoisticWaitlisted = premToWL->Prem_status::is_onDiagnosticWaitlist(diagnosticType);
+					if (alreadyDiagnoisticWaitlisted == 0){
+						diagnosticWaitlist[diagnosticType].emplace_back(f);
+						if (parameters->dangerousContacts_on==1){
+								std::string fileStatus = getAny_fileStatus(premToWL);
+								if(verbose>1){std::cout<<"File status of new diagnostic waitlist member: "<<fileStatus<<std::endl;}
+									premToWL->Prem_status::set_statusWhenDiagnosticWaitlisted(diagnosticType, fileStatus);
+								}
+					}
+				}
+			}
+		}
+
+	// clear newly reported only if control is not on
+		if (parameters->control_on==false){
+			newPremReports.clear();
+		}
+	newPremSuspects.clear();
+	newPremVaxs.clear();
+
+if (verbose >1){
+	for (auto& d: diagnosticWaitlist){
+	std::cout<< "On diagnoistic waitlist "<<d.first<<": "<<d.second.size()<<" farms"<<std::endl;
+	}
+
+}
+
+}
+
 
 ////For control types that have resources added during the simulation this function checks the resource levels and adds to them if necessary
 
@@ -958,15 +1561,19 @@ void Status_manager::add_implemented(int t)
 		if (w.second.size()>0){
 			std::vector<Farm*> updatedWaitlist;
 			std::vector<Farm*> toImplement;
+
 			controlManager->filter_constraints(w.first, w.second, updatedWaitlist, toImplement,
-																				controlResourceLevels, partiallyControlledPrems);
+                                               controlResourceLevels, partiallyControlledPrems);
+
 			w.second = updatedWaitlist;
-			std::tuple<double, double> duration = allControlTypes->at(w.first)->implementDuration;
+			std::tuple<double, double>  duration = allControlTypes->at(w.first)->implementDuration;
+ 			std::cout<<"SM:add_implemented: "<<toImplement.size()<<" is the size of to Implement at control type "<<w.first<<std::endl;
 
 			for (auto& i:toImplement){
 				// add to control list & add probPreventExposure values
 				set_status(i, t, "implemented."+w.first, duration);
 			}
+
 		}
 	}
 	for (auto& w:waitlistRegion){ // for each control type (w.first)
@@ -987,17 +1594,55 @@ void Status_manager::add_implemented(int t)
 	}
 }
 
+////For diagnostic types that have resources added during the simulation this function checks the resource levels and adds to them if necessary
+
+/// For any diagnostic types with waitlist, checks with Diagnostic_manager to determine what
+/// diagnostic is started for which farms, based on constraint availability
+void Status_manager::add_started(int t)
+{
+	toTest.clear();
+	for (auto& dw:diagnosticWaitlist){ // for each diagnostic type (w.first)
+		if (dw.second.size()>0){
+			std::vector<Farm*> updatedDiagnosticWaitlist;
+			std::vector<Farm*> toStart;
+
+
+			diagnosticManager->filter_diagnosticConstraints(dw.first, dw.second, updatedDiagnosticWaitlist, toStart, diagnosticResourceLevels, partiallyTestedPrems);
+
+			dw.second = updatedDiagnosticWaitlist;
+			 std::tuple<double, double> duration = allDiagnosticTypes->at(dw.first)->startToCompleteDuration;
+
+ 			toTest[dw.first] = toStart;
+ 			std::cout<<"SM:add_started: "<<toTest[dw.first].size()<<" is the size of toTest at diagnostic type "<<dw.first<<std::endl;
+
+			for (auto& i:toStart){
+				// add to diagnostics list & add probPreventExposure values
+				set_status(i, t, "started."+dw.first, duration);
+			}
+		}
+	}
+}
+
 /// Returns file status of a Prem_status, or "notDangerousContact" if Prem_status does not exist
 std::string Status_manager::getAny_fileStatus(Farm* f) const
 {
-	std::string output;
+//	std::string output;
 	int fid = f->Farm::get_id();
-	if (changedStatus.count(fid)==0){
-		output = "notDangerousContact";
-	} else {
-		output = changedStatus.at(fid)->Prem_status::get_fileStatus();
-	}
-	return output;
+	auto it = changedStatus.find(fid);
+	if(it != changedStatus.end())
+    {
+        return it->second->get_fileStatus();
+    }
+    else
+    {
+        return "notDangerousContact";
+    }
+//	if (changedStatus.count(fid)==0){
+//		output = "notDangerousContact";
+//	} else {
+//		output = changedStatus.at(fid)->Prem_status::get_fileStatus();
+//	}
+//	return output;
 }
 
 /// Returns disease status of a Prem_status, or "sus" if Prem_status does not exist
@@ -1013,6 +1658,20 @@ std::string Status_manager::getAny_diseaseStatus(Farm* f) const
 	return output;
 }
 
+/// Returns diagnostic status of a Prem_status, or "none" if Prem_status does not exist
+std::string Status_manager::getAny_diagnosticStatus(Farm* f)
+{
+	std::string output;
+	int fid = f->Farm::get_id();
+	if (changedStatus.count(fid)==0){
+		output = "none";
+	} else {
+		output = changedStatus.at(fid)->Prem_status::get_diagnosticStatuses();
+	}
+	//std::cout<<"SM: get_diagnosticStatus output "<<output<<std::endl;
+	return output;
+}
+
 void Status_manager::get_premsWithStatus(std::vector<std::string> status_vector, std::vector<Farm*>& output)
 {
     std::vector<Farm*> temp_output;
@@ -1025,19 +1684,41 @@ void Status_manager::get_premsWithStatus(std::vector<std::string> status_vector,
     output.swap(temp_output);
 }
 
-/// Copies all premises with current disease status s (as of last call to updates) into input vector
-void Status_manager::get_premsWithStatus(std::string s, std::vector<Farm*>& output)
+/// Copies all premises with current disease status status (as of last call to updates) into input vector
+void Status_manager::get_premsWithStatus(std::string status, std::vector<Farm*>& output)
 {
-	if (diseaseStatuses.count(s)==1){
+	if (diseaseStatuses.count(status)==1){
+		std::vector<Prem_status*> outputPS; // return farms in [lo, end)
+		get_premStatusesWithStatus(status, outputPS);
 		std::vector<Farm*> tempOutput;
-		std::vector<Prem_status*>::iterator lo_it = diseaseStatuses.at(s).units.begin() + diseaseStatuses.at(s).lo;
-		std::vector<Prem_status*> outputPS(lo_it, diseaseStatuses.at(s).units.end()); // return farms in [lo, end)
 		for (auto& f:outputPS){
 			tempOutput.emplace_back(allPrems->at(f->Farm::get_id()));
 		}
 		output.swap(tempOutput);
 	}
 }
+
+void Status_manager::get_premStatusesWithStatus(std::vector<std::string>status_vector, std::vector<Prem_status*>& output)
+{
+    std::vector<Prem_status*> temp_output;
+    for(std::string status : status_vector)
+    {
+        std::vector<Prem_status*> partial_output;
+        get_premStatusesWithStatus(status, partial_output);
+        temp_output.insert(temp_output.end(), partial_output.begin(), partial_output.end());
+    }
+    output.swap(temp_output);
+}
+
+void Status_manager::get_premStatusesWithStatus(std::string status, std::vector<Prem_status*>& output)
+{
+    	if (diseaseStatuses.count(status)==1){
+            std::vector<Prem_status*>::iterator lo_it = diseaseStatuses.at(status).units.begin() + diseaseStatuses.at(status).lo;
+            std::vector<Prem_status*> temp_output(lo_it, diseaseStatuses.at(status).units.end()); // return farms in [lo, end)
+            output.swap(temp_output);
+    	}
+}
+
 
 /// Copies all premises that were status s and DC at time of waitlisting
 int Status_manager::count_allDCPrems(const std::string s)
@@ -1050,6 +1731,23 @@ int Status_manager::count_allDCPrems(const std::string s)
 		c_type.replace(0, c_type.find(".")+1, "");
 		for (auto& f:outputPS){
 			bool wasDC = f->Prem_status::was_dcWhenWaitlisted(c_type);
+			if (wasDC==1){++dcCount;}
+		}
+	}
+ return dcCount;
+}
+
+/// Copies all premises that were status s and DDC at time of waitlisting
+int Status_manager::count_allDDCPrems(const std::string s)
+{
+	int dcCount=0;
+	if (diagnosticStatuses.count(s)==1){
+		std::vector<Prem_status*> outputPS(diagnosticStatuses.at(s).units.begin(), diagnosticStatuses.at(s).units.end());
+		// separate d_type from "implemented."
+		std::string d_type = s;
+		d_type.replace(0, d_type.find(".")+1, "");
+		for (auto& f:outputPS){
+			bool wasDC = f->Prem_status::was_dcWhenDiagnosticWaitlisted(d_type);
 			if (wasDC==1){++dcCount;}
 		}
 	}
@@ -1139,11 +1837,12 @@ void Status_manager::get_seedCos(std::vector<std::string>& output)
 /// Add dangerousContacts outcomes to Prem_status (no direct access to Prem_status
 /// from Grid_checker)
 void Status_manager::add_potentialDC(Farm* f1, Farm* f2,
-	std::unordered_map<std::string, bool>& dcEvaluations)
+	std::vector<bool>& dcEvaluations)
 {
 	// f1 should already exist in changedStatus since it is infectious
 	if(verbose>1){std::cout<<"SM::Storing "<<f2->Farm::get_id()<<" as possible DC of farm "<<f1->Farm::get_id()<<
-	" with p|sus="<<dcEvaluations.at("sus")<<" and p|exp="<<dcEvaluations.at("exp")<<std::endl;}
+	" with p|sus="<<dcEvaluations.at(static_cast<int>(DiseaseStatus::SUS))<<" and p|exp="<<
+	dcEvaluations.at(static_cast<int>(DiseaseStatus::EXP))<<std::endl;}
 
 	changedStatus.at(f1->Farm::get_id())->Prem_status::add_potentialDCInfo(f2, dcEvaluations);
 	if(verbose>1){std::cout<<"SM add_potentialDC after call to premstatus_addpotentialDCINFO"<<std::endl;}
@@ -1153,21 +1852,51 @@ void Status_manager::add_potentialDC(Farm* f1, Farm* f2,
 /// Formats results for summary output file
 std::string Status_manager::formatRepSummary(int rep, int duration, double repTimeMS)
 {
-    std::unordered_set<County*> affected_counties;
     //Get number of infectious premises and their respective counties.
-	int nInf = 0;
-	if (diseaseStatuses.count("inf")>0)
+    std::string inf_string = "inf";
+    if(parameters->infectionType == InfectionType::BTB)
     {
-        std::vector<Prem_status*>* all_infectious = &diseaseStatuses.at("inf").units; //Pointer to the vector of all Prem_statuses with status "inf"
-        nInf = all_infectious->size();
-        for(Prem_status* p : *all_infectious)
-        {
-            affected_counties.insert(p->get_parent_county()); //Add all counties with infectious farms present to the set.
-        }
+        inf_string = "btb";
+    }
+	int nInf = 0;
+	std::vector<Prem_status*> all_infectious;
+	if (parameters->infectionType == InfectionType::FMD and diseaseStatuses.count(inf_string)>0)
+    {
+            all_infectious = diseaseStatuses.at(inf_string).units; //Pointer to the vector of all Prem_statuses with status given by inf_string
+    }
+    else if(parameters->infectionType == InfectionType::BTB)
+    {
+        all_infectious.assign(btb_all_infected.begin(), btb_all_infected.end());
+    }
+    nInf = all_infectious.size();
+
+    std::unordered_set<County*> affected_counties;
+    for(Prem_status* p : all_infectious)
+    {
+        affected_counties.insert(p->get_parent_county()); //Add all counties with infectious farms present to the set.
     }
     int nAffCounties = affected_counties.size();
 
+	int nReported = 0;
+	std::vector<Prem_status*> all_reports;
+	if (fileStatuses.count("reported")>0)
+    {
+        all_reports = fileStatuses.at("reported").units; //Pointer to the vector of all Prem_statuses with status given by reported
+    }
+//    else if(parameters->infectionType == BTB)
+//    {
+//        all_reports.assign(btb_all_reported.begin(), btb_all_reported.end());
+//    }
+    nReported = all_reports.size();
+
+    int nRecovered = 0;
+    if(parameters->infectionType == InfectionType::BTB)
+    {
+        nRecovered = btb_all_recovered.size();
+    }
+
 	std::vector<int> controlCounts; // for each control type, will be implemented count, then effective count
+	std::vector<int> diagnosticCounts; // for each diagnostic type, will be implemented count, then effective count
 
 	if(parameters->control_on==1){
 		for (auto& ct:(parameters->controlTypes)){
@@ -1212,6 +1941,47 @@ if(verbose>1){std::cout<<"Total prems with status "<<controlStatusE<<" = "<<cont
 
 		}
 	}
+	if(parameters->diagnostic_on==1){
+		for (auto& dt:(parameters->diagnosticTypes)){
+			int started = 0;
+			int complete = 0;
+
+			std::string diagnosticStatusS = "started."+dt;
+			if (diagnosticStatuses.count(diagnosticStatusS)>0){
+if(verbose>1){std::cout<<"Total prems with status "<<diagnosticStatusS<<" = "<<diagnosticStatuses.at(diagnosticStatusS).units.size()<<std::endl;}
+				started = diagnosticStatuses.at(diagnosticStatusS).units.size();
+			}
+
+			std::string diagnosticStatusC = "complete."+dt;
+			if (diagnosticStatuses.count(diagnosticStatusC)>0){
+if(verbose>1){std::cout<<"Total prems with status "<<diagnosticStatusC<<" = "<<diagnosticStatuses.at(diagnosticStatusC).units.size()<<std::endl;}
+				complete = diagnosticStatuses.at(diagnosticStatusC).units.size();
+			}
+
+			bool showDcCount = 0;
+			int dcCount = 0;
+			for (auto&dcType:(parameters->dcDiagnosticTypes)){
+				if (dcType == dt){
+					showDcCount = 1;
+					dcCount = count_allDDCPrems("started."+dt);
+				}
+			}
+			if (complete > started){ // only happens when lag from start->comp is 0, so start not recorded - fill in here
+				started = complete;
+				if (showDcCount==1){
+					dcCount = count_allDDCPrems("complete."+dt);
+				}
+			}
+
+			diagnosticCounts.emplace_back(started);
+			diagnosticCounts.emplace_back(complete);
+			if (showDcCount==1){
+				diagnosticCounts.emplace_back(dcCount);
+			}
+
+		}
+	}
+
 	std::vector<int> seedIDs; seedIDs.reserve(seededFarms.size());
 	for (auto& sf:seededFarms){
 		seedIDs.emplace_back(sf->Farm::get_id());
@@ -1238,9 +2008,16 @@ if(verbose>1){std::cout<<", seeds "<<seeds;}
 if(verbose>1){std::cout<<", seedCos "<<seedCos;}
 	addItemTab(toPrint, repTimeS); // runtime
 if(verbose>1){std::cout<<", repTimeSec "<<repTimeS<<std::endl;}
+	addItemTab(toPrint, nReported); // # total reported premises
+if(verbose>1){std::cout<<", nReported "<<nReported;}
 	if (controlCounts.size()>0){
 		for (auto& cc:controlCounts){
 			addItemTab(toPrint, cc); // # total prems with effective control
+		}
+	}
+	if (diagnosticCounts.size()>0){
+		for (auto& dd:diagnosticCounts){
+			addItemTab(toPrint, dd); // # total prems with effective diagnostics
 		}
 	}
 	if (parameters->dangerousContacts_on==1){
@@ -1251,6 +2028,13 @@ if(verbose>1){std::cout<<", repTimeSec "<<repTimeS<<std::endl;}
 		}
 		addItemTab(toPrint, meanDCsPerIP);
 	}
+
+    if(parameters->infectionType == InfectionType::BTB)
+    {
+        addItemTab(toPrint, btb_n_freshly_infected_animals);
+        addItemTab(toPrint, nRecovered);
+    }
+
 	toPrint.replace(toPrint.end()-1, toPrint.end(), "\n"); // add line break at end
 if(verbose>1){std::cout<<"toPrint: "<<toPrint<<std::endl;}
 
@@ -1313,12 +2097,279 @@ Prem_status* Status_manager::get_correspondingPremStatus(int fid)
 }
 
 // returns the norminf map
-const std::unordered_map<std::string, double>& Status_manager::get_normInf_map() const
+const std::unordered_map<std::string, std::vector<double>>& Status_manager::get_normInf_map() const
 {
     return gridManager->Grid_manager::get_normInf_map();
 }
 
-const std::unordered_map<std::string, double>& Status_manager::get_normSus_map() const
+const std::unordered_map<std::string, std::vector<double>>& Status_manager::get_normSus_map() const
 {
     return gridManager->Grid_manager::get_normSus_map();
+}
+
+/// Update the within-herd spread for btb infection
+/// \param[in] t Timestep
+/// \param[in] quarter_idx Index of the current quarter
+void Status_manager::btb_updateDisease(int t, int quarter_idx)
+{
+	if (diseaseStatuses.count("btb")>0){
+        update(t, "btb", diseaseStatuses.at("btb")); // any 'btb' expiring -> 'rec'
+        btb_updateWithinHerd(t, quarter_idx);
+	}
+}
+
+void Status_manager::btb_updateWithinHerd(int t, int quarter_idx)
+{
+    if(diseaseStatuses.at("btb").lo != 0)
+    {
+        std::cout << "This should not happen." << std::endl;
+        exit(EXIT_FAILURE);
+    }
+    if(diseaseStatuses.find("btb") != diseaseStatuses.end())
+    {
+        std::vector<Prem_status*>::iterator lo_it_btb = diseaseStatuses.at("btb").units.begin() + diseaseStatuses.at("btb").lo;
+        std::vector<Prem_status*> prem_statuses_btb(lo_it_btb, diseaseStatuses.at("btb").units.end()); // return farms in [lo, end)
+        std::vector<Prem_status*> retained_btb;
+        retained_btb.reserve(prem_statuses_btb.size());
+        for(Prem_status* ps : prem_statuses_btb)
+        {
+            bool still_infected = ps->btb_update_WH_spread(quarter_idx);
+            if(still_infected)
+            {
+                retained_btb.push_back(ps);
+            }
+            else
+            {
+    //            changedStatus.erase(ps->get_id()); // I hope this is the only place where it needs to be removed from, else we'll have invalid pointers from now on...
+                set_status(ps, t, "rec", pastEndTime);
+    //            delete ps;
+            }
+
+        }
+        diseaseStatuses.at("btb").units.swap(retained_btb);
+    }
+
+    if(diseaseStatuses.find("rec") != diseaseStatuses.end())
+    {
+        std::vector<Prem_status*>::iterator lo_it_rec = diseaseStatuses.at("rec").units.begin() + diseaseStatuses.at("rec").lo;
+        std::vector<Prem_status*> prem_statuses_rec(lo_it_rec, diseaseStatuses.at("rec").units.end()); // return farms in [lo, end)
+        std::vector<Prem_status*> retained_rec;
+        retained_rec.reserve(prem_statuses_rec.size());
+        for(Prem_status* ps : prem_statuses_rec)
+        {
+            bool not_infected = (ps->btb_get_N_infected() == 0);
+            if(not_infected)
+            {
+                retained_rec.push_back(ps);
+            }
+        }
+        diseaseStatuses.at("rec").units.swap(retained_rec);
+    }
+}
+
+Prem_status* Status_manager::btb_make_trace(Prem_status* pst, int current_depth)
+{
+    const std::vector<Shipment*>& shipments = pst->get_received_inf_shipments();
+    ++current_depth;
+    //Go though the infected shipments backwards since, the last is the latest.
+    Prem_status* final_origin = nullptr;
+    //If prem 1 has sent to prem 2, and prem 2 has sent to prem 1 and neither are farms,
+    //there will be a circular referencing that ends in an infinite loop if it's not
+    //broken after a while. So unless the origin is found after 20 backtraces,
+    // break out and consider the trace to be a failure.
+    if(current_depth >= 20)
+    {
+        return final_origin;
+    }
+    for(auto rit = shipments.rbegin(); rit != shipments.rend(); ++rit)
+    {
+        Prem_status* nearest_origin = (*rit)->oPst;
+        if(nearest_origin->get_prem_class()->tag != "Frm")
+        {
+            //It's not a farm, so source not found yet. Go deeper. I.e. to the prem one step further removed.
+            return final_origin = btb_make_trace(nearest_origin, current_depth);
+        }
+        else
+        {
+            //It's a farm, so we've found the source.
+            final_origin = nearest_origin;
+            return final_origin;
+        }
+
+    }
+    return final_origin;
+}
+
+void Status_manager::btb_updatePremSizeChangesQuarter(int t)
+{
+    std::vector<Prem_status*> retained_btb;
+    for(auto& status_list_pair : diseaseStatuses)
+    {
+        std::string status = status_list_pair.first;
+        statusList<Prem_status*>& status_list = status_list_pair.second;
+        for(Prem_status* ps : status_list.units)
+        {
+            bool still_infected = ps->btb_update_size_change_quarter();
+            //If this is a disease status there is a possiblility that this pemises will be "cured" by losing it's last infected animal.
+            if(status == "btb")
+            {
+                if(still_infected)
+                {
+                    retained_btb.push_back(ps);
+                }
+                else
+                {
+                    set_status(ps, t, "rec", pastEndTime);
+                }
+            }
+        }
+    }
+    diseaseStatuses.at("btb").units.swap(retained_btb);
+}
+
+void Status_manager::btb_evalExposure(int t)
+{
+    int localCount = 0;
+	int shipCount = 0;
+	std::vector<std::pair<Farm*, int>> toExpose;
+	for (auto& e:exposureForEval){ // e = tuple of destination Farm, source Farm, route, true probability of infection, and pointer to shipment (=nullptr if not shipment spread)
+		Farm* destination = std::get<0>(e);
+		Farm* origin = std::get<1>(e);
+		int route = std::get<2>(e);
+		std::string prevented = "none"; // default value - no prevention, exposure occurs
+		if (parameters->control_on == 0){
+
+			if(route == 1) //Exposure through shipment
+            {
+                Shipment* s = std::get<4>(e);
+                Prem_status* origin_prem_status = changedStatus.at(origin->Farm::get_id());
+                s->oPst = origin_prem_status;
+                //Sample number of animals in each  btb infection class in the shipment from the population
+                //of the sender.
+                std::vector<unsigned int> n_in_btb_classes(6,0);
+                origin_prem_status->btb_subtract_from_inf_classes(s->volume, n_in_btb_classes); //Removes animals and updates prevalence in calsses accordingly.
+                unsigned int n_infected = std::accumulate(n_in_btb_classes.begin()+1, n_in_btb_classes.end(), 0); //Add up all classes that are not susceptible.
+                //To see if there were infected animals on the shipment there was previously a check against s->vol - n_in_btb_classes[0] > 0,
+                //this works when the shipment vol can't be larger than the actual number of animals (i.e. farms and feedlots) but not when
+                //the actual number of animals sent is truncated to be max the size of the prem so the sampled vol of the shipment according to USAMM (s->vol)
+                //can be larger than the prem size (this is the case for markets).
+                if(n_infected > 0) //Infection only happens if exposed/infectious animals are shipped. If only susc. then there will be no transmission.
+                {
+                    set_status(destination, t, "btb", pastEndTime); // disease status
+                    set_status(destination, t, "exposed", pastEndTime);
+                    Prem_status* dest_prem_status = changedStatus.at(destination->Farm::get_id());
+                    dest_prem_status->btb_add_to_inf_classes(n_in_btb_classes); //Adds the shipped animals to the various classes and updates prevalence accordingly.
+                    ++shipCount;
+                    add_premSource(t, destination, origin, route, prevented);
+                    dest_prem_status->add_infected_shipment(s);
+                    s->n_infected = n_infected;
+                }
+                else
+                {
+                    s->n_infected = 0;
+                }
+            }
+            else //Exposure through local or wildlife.
+            {
+                set_status(destination, t, "btb", pastEndTime); // disease status
+                set_status(destination, t, "exposed", pastEndTime);
+                Prem_status* dest_prem_status = changedStatus.at(destination->Farm::get_id());
+                dest_prem_status->btb_expose_susceptibles(1); //One single susceptible animal becomes infected (if there is one).
+                add_premSource(t, destination, origin, route, prevented);
+                ++localCount;
+            }
+		} else if (parameters->control_on == 1){
+			// determine if origin farm is controlled and transmits
+            //Didn't implement vaccination code based on my assumption that we wont run any btb
+			//vaccine runs (afaik there is no reasonable vaccine). If you need one, I think what can
+			//be found in the FMD code (function evalExposure) is a good starting point.
+			bool localTransmissionOccurs = eval_premTransmission(origin);
+			bool localExposureOccurs = eval_premExposure(destination);
+
+			if (!localTransmissionOccurs){
+				if (verbose>1){std::cout<<"Transmission blocked."<<std::endl;}
+				prevented = "src:"+vecToCommaSepString(changedStatus.at(origin->Farm::get_id())->Prem_status::get_controlStatuses()); // determining which of multiple control types could get complicated
+				add_premSource(t, destination, origin, route, prevented);
+			}
+
+			if (!localExposureOccurs){
+				if (verbose>1){std::cout<<"Exposure blocked."<<std::endl;}
+				prevented = "exp:"+vecToCommaSepString(changedStatus.at(destination->Farm::get_id())->Prem_status::get_controlStatuses()); // determining which of multiple control types could get complicated
+				add_premSource(t, destination, origin, route, prevented);
+			}
+			else if (localTransmissionOccurs && localExposureOccurs){
+				if(route == 1) //Exposure through shipment
+                {
+                    Shipment* s = std::get<4>(e);
+                    Prem_status* origin_prem_status = changedStatus.at(origin->Farm::get_id());
+                    s->oPst = origin_prem_status;
+                    //Sample number of animals in each  btb infection class in the shipment from the population
+                    //of the sender.
+                    std::vector<unsigned int> n_in_btb_classes(6,0);
+                    origin_prem_status->btb_subtract_from_inf_classes(s->volume, n_in_btb_classes); //Removes animals and updates prevalence in calsses accordingly.
+                    if(s->volume - n_in_btb_classes[0] > 0) //Infection only happens if exposed/infectious animals are shipped. If only susc. then there will be no transmission.
+                    {
+                        set_status(destination, t, "btb", pastEndTime); // disease status
+                        set_status(destination, t, "exposed", pastEndTime);
+                        Prem_status* dest_prem_status = changedStatus.at(destination->Farm::get_id());
+                        dest_prem_status->btb_add_to_inf_classes(n_in_btb_classes); //Addes the shipped animals to the various classes and updates prevalence accordingly.
+                        add_premSource(t, destination, origin, route, prevented);
+                        ++shipCount;
+                        dest_prem_status->add_infected_shipment(s);
+                        int n_infected = std::accumulate(n_in_btb_classes.begin()+1, n_in_btb_classes.end(), 0);
+                        s->n_infected = n_infected;
+                    }
+                    else
+                    {
+                        s->n_infected = 0;
+                    }
+                }
+                else
+                {
+                    set_status(destination, t, "btb", pastEndTime); // disease status
+                    set_status(destination, t, "exposed", pastEndTime);
+                    Prem_status* dest_prem_status = changedStatus.at(destination->Farm::get_id());
+                    dest_prem_status->btb_expose_susceptibles(1); //One single susceptible animal becomes infected (if there is one).
+                    add_premSource(t, destination, origin, route, prevented);
+                    ++localCount;
+                }
+
+
+            } // end if transmission occurs
+		} // end "if control on"
+	} // end "for each exposure to evaluate"
+
+	if(verbose>0){
+		std::cout<<localCount<<" local infections (may include double-counted)"<<std::endl;
+		std::cout<<shipCount<<" shipping infections (may include local)"<<std::endl;
+	}
+	exposureForEval.clear();
+}
+
+void Status_manager::btb_updateRecords()
+{
+    std::vector<Prem_status*> prem_statuses; prem_statuses.reserve(100000);
+    //Record new recovery events.
+    get_premStatusesWithStatus("rec", prem_statuses);
+    for(Prem_status* pst : prem_statuses)
+    {
+        btb_all_recovered.insert(pst);
+    }
+
+    prem_statuses.clear();
+    get_premStatusesWithStatus("reported", prem_statuses);
+    for(Prem_status* pst : prem_statuses)
+    {
+        btb_all_reported.insert(pst);
+    }
+
+    prem_statuses.clear();
+    //Record new infections and currently infected.
+    get_premStatusesWithStatus("btb", prem_statuses);
+    for(Prem_status* pst : prem_statuses)
+    {
+        btb_n_freshly_infected_animals += pst->btb_get_new_external_infections_since_last_t() +
+                                          pst->btb_get_new_WH_infections_since_last_t();
+        btb_all_infected.insert(pst);
+    }
 }

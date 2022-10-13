@@ -37,6 +37,7 @@ class Shipment_kernel
 {
 typedef double (Shipment_kernel::*k_fun_ptr)(double); //Kernel function pointer
 typedef double (Shipment_kernel::*d_fun_ptr)(County*, County*); //Distance function pointer
+typedef double (Shipment_kernel::*bin_fun_ptr)(double); //Binning function pointer.
 
 public:
     Shipment_kernel(double dx, double R, std::string type = "linear", bool binning_on = false);
@@ -61,6 +62,7 @@ private:
     static std::vector<double> binned_distances;
     k_fun_ptr k_function;
     d_fun_ptr d_function;
+    bin_fun_ptr binning_function;
 
     ///Set bins to be smaller at short distances and increase gradually in size
     ///with the distance. This is the way that binning is implemented in USAMM.
@@ -68,7 +70,9 @@ private:
     ///Set bins to be uniformly spaced.
     void set_bins_unif();
     ///Finds the bin of the distance d given the current set of bins.
-    double get_bin(double d);
+    double get_bin_USAMMv2(double d);
+    ///Takes a distance d and returns it binned as needed for USAMMv3 shipments.
+    double get_bin_USAMMv3(double d);
     ///The distance kernel function of USAMM.
     double linear_distance_kernel(double d);
     ///The distance kernel function of the squared distance. Experimental. Possibly faster.

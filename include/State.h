@@ -8,8 +8,9 @@
 #include <unordered_map>
 #include <unordered_set>
 #include "Region.h"
-#include "USAMM_parameters.h"
-#include <gsl_rng.h>
+#include "USAMMv2_parameters.h"
+#include "USAMMv3_parameters.h"
+#include <gsl/gsl_rng.h>
 
 class Farm;
 class County;
@@ -34,15 +35,21 @@ public:
     void set_s(double in_s, Farm_type* in_type);
     void set_std(double in_std, Farm_type* in_type);
     void set_kurt(double in_kurt, Farm_type* in_type);
-    void set_shipping_parameters(int USAMM_version, USAMM_parameters& usamm_par,
-                                 Farm_type* ft, std::string time_period,
-                                 size_t days_in_period, size_t days_rem);
+    void set_inflow(double in_inflow, Farm_type* in_type);
+    void set_outflow(double in_outflow, Farm_type* in_type);
+    void set_shipping_parameters_USAMMv2(int USAMM_version, USAMMv2_parameters& usamm_par,
+                                         Farm_type* ft, std::string time_period,
+                                         size_t days_in_period, size_t days_rem);
+    void set_shipping_parameters_USAMMv3(int USAMM_version, USAMMv3_parameters& usamm_par,
+                                         Farm_type* ft, std::string time_period,
+                                         size_t days_rem);
     void reset_N_todo();
     void normalize_shipping_weights(Farm_type* ft);
     void update_shipping_rate(Farm_type* ft);
     int generate_daily_shipments(Farm_type* ft, int days_rem);
 
     int get_code();
+    std::string get_code_str();
     double get_a(Farm_type* ft);
     double get_b(Farm_type* ft);
     double get_N(Farm_type* ft);
@@ -51,13 +58,17 @@ public:
     double get_null_lambda(Farm_type* ft);
     double get_shipping_rate(Farm_type* ft); //This returns the sum of all member farms' weights multiplied by null_lambda.
     double get_s(Farm_type* ft);
+    double get_inflow(Farm_type* ft);
+    double get_outflow(Farm_type* ft);
     double get_total_farm_oweight_sum(); //Needed when figuring out probability that shipments originate from unaffected farms ( P(unaffected) = P(Total weight) - P(affected) ).
     std::unordered_map<Farm_type*, double> get_null_lambda_map();
+    std::vector<County*> get_member_counties();
     int get_n_counties(); //inlined
-    int get_n_farms() const;
-    int get_n_farms(Farm_type* ft) const;
-    int get_farms(std::vector<Farm*>& farm_v) const;
-    int get_farms(std::vector<Farm*>& farm_v, Farm_type* ft) const;
+    int get_n_premises() const;
+    int get_n_premises(Farm_type* ft) const;
+//    int get_premises(std::vector<Farm*>& farm_v) const;
+//    int get_premises(std::vector<Farm*>& farm_v, Farm_type* ft) const;
+    double get_total_farm_weight(Farm_type* ft);
     void print_bools();
 
 private:
@@ -80,15 +91,20 @@ private:
     std::unordered_map<Farm_type*, double> s_map;
     std::unordered_map<Farm_type*, double> std_map;
     std::unordered_map<Farm_type*, double> kurt_map;
+//    std::unordered_map<Farm_type*, double> inflow_map;
+    std::vector<double> inflow_vec;
+    std::unordered_map<Farm_type*, double> outflow_map;
 
     virtual void set_initialized(bool& parameter);
     virtual void all_initialized();
 
     void setup_usamm_fun_pointers(int usamm_version);
-    void set_shipping_parameters_v1(USAMM_parameters& usamm_par, Farm_type* ft, //For use with usamm v1 parameters
+    void set_shipping_parameters_v1(USAMMv2_parameters& usamm_par, Farm_type* ft, //For use with usamm v1 parameters
                                     std::string time_period, size_t days_in_period, size_t days_rem);
-    void set_shipping_parameters_v2(USAMM_parameters& usamm_par, Farm_type* ft, //For use with usamm v2 parameters
-                                    std::string time_period, size_t days_in_period, size_t days_rem);
+    void set_shipping_parameters_v2(USAMMv2_parameters& usamm_par, Farm_type* ft, //For use with usamm v2 parameters
+                                    std::string time_period, size_t days_rem);
+    void set_shipping_parameters_v3(USAMMv3_parameters& usamm_par, Farm_type* ft, //For use with usamm v2 parameters
+                                    std::string time_period, size_t days_rem);
 
     int generate_shipments_N(Farm_type* ft, int days_rem);
     int generate_shipments_rate(Farm_type* ft, int days_rem);

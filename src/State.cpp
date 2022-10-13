@@ -3,7 +3,7 @@
 #include "County.h"
 #include "shared_functions.h"
 
-#include <gsl_randist.h>
+#include <gsl/gsl_randist.h>
 
 State::State(std::string id, int state_code, int usamm_version) :
     Region(id),
@@ -101,9 +101,29 @@ void State::set_kurt(double in_kurt, Farm_type* in_type)
     kurt_map[in_type] = in_kurt;
 }
 
+void State::set_inflow(double in_inflow, Farm_type* in_type)
+{
+    size_t ft_idx = size_t(in_type->get_index());
+    if(inflow_vec.size() < ft_idx+1)
+    {
+        inflow_vec.resize(ft_idx+1);
+    }
+    inflow_vec[ft_idx] = in_inflow;
+}
+
+void State::set_outflow(double in_outflow, Farm_type* in_type)
+{
+    outflow_map[in_type] = in_outflow;
+}
+
 int State::get_code()
 {
     return state_code;
+}
+
+std::string State::get_code_str()
+{
+    return std::to_string(this->get_code());
 }
 
 double State::get_a(Farm_type* ft)
@@ -146,14 +166,29 @@ double State::get_s(Farm_type* ft)
     return s_map[ft];
 }
 
+double State::get_inflow(Farm_type* ft)
+{
+    return inflow_vec[ft->get_index()];
+}
+
+double State::get_outflow(Farm_type* ft)
+{
+    return outflow_map[ft];
+}
+
 std::unordered_map<Farm_type*, double> State::get_null_lambda_map()
 {
     return null_lambda_map;
 }
 
-void State::set_shipping_parameters(int USAMM_version, USAMM_parameters& usamm_par,
-                                    Farm_type* ft, std::string time_period,
-                                    size_t days_in_period, size_t days_rem)
+std::vector<County*> State::get_member_counties()
+{
+    return member_counties;
+}
+
+void State::set_shipping_parameters_USAMMv2(int USAMM_version, USAMMv2_parameters& usamm_par,
+                                            Farm_type* ft, std::string time_period,
+                                            size_t days_in_period, size_t days_rem)
 {
     if(USAMM_version == 1)
     {
@@ -163,13 +198,16 @@ void State::set_shipping_parameters(int USAMM_version, USAMM_parameters& usamm_p
     else if(USAMM_version == 2)
     {
         this->set_shipping_parameters_v2(usamm_par, ft, time_period,
-                                         days_in_period, days_rem);
+                                        days_rem);
     }
-    else
-    {
-        std::cout << "Bad usamm version: " << USAMM_version << ". Exiting." << std::endl;
-        exit(EXIT_FAILURE);
-    }
+}
+
+void State::set_shipping_parameters_USAMMv3(int USAMM_version, USAMMv3_parameters& usamm_par,
+                                            Farm_type* ft, std::string time_period,
+                                            size_t days_rem)
+{
+    this->set_shipping_parameters_v3(usamm_par, ft, time_period,
+                                     days_rem);
 }
 
 void State::setup_usamm_fun_pointers(int usamm_version)
@@ -189,7 +227,7 @@ void State::setup_usamm_fun_pointers(int usamm_version)
 }
 
 
-void State::set_shipping_parameters_v1(USAMM_parameters& usamm_par,
+void State::set_shipping_parameters_v1(USAMMv2_parameters& usamm_par,
                                        Farm_type* ft, std::string time_period,
                                        size_t days_in_period, size_t days_rem)
 {
@@ -227,9 +265,9 @@ void State::set_shipping_parameters_v1(USAMM_parameters& usamm_par,
         }
 }
 
-void State::set_shipping_parameters_v2(USAMM_parameters& usamm_par,
+void State::set_shipping_parameters_v2(USAMMv2_parameters& usamm_par,
                                        Farm_type* ft, std::string time_period,
-                                       size_t days_in_period, size_t days_rem)
+                                       size_t days_rem)
 {
         double a = usamm_par.get_a(state_code, time_period);
         double b = usamm_par.get_b(state_code, time_period);
@@ -243,6 +281,19 @@ void State::set_shipping_parameters_v2(USAMM_parameters& usamm_par,
         set_s(s, ft);
         set_std(stdev, ft);
         set_kurt(kurt, ft);
+}
+
+void State::set_shipping_parameters_v3(USAMMv3_parameters& usamm_par,
+                                       Farm_type* ft, std::string time_period,
+                                       size_t days_rem)
+{
+        std::pair<double, double> ab = usamm_par.get_ab(id, time_period);
+        double inflow = usamm_par.get_inflow(id, time_period);
+        double outlflow = usamm_par.get_outflow(id, time_period);
+        set_a(ab.first, ft);
+        set_b(ab.second, ft);
+        set_inflow(inflow, ft);
+        set_outflow(outlflow, ft);
 }
 
 int State::generate_shipments_N(Farm_type* ft, int days_rem)
@@ -269,25 +320,29 @@ void State::reset_N_todo()
 
 void State::normalize_shipping_weights(Farm_type* ft)
 {
-    double norm = 0.0;
+    double o_norm = 0.0;
     for(County* c : member_counties)
     {
-        norm += c->get_unnormed_o_weight(ft);
+        o_norm += c->get_o_unnormalized_prem_weight_sum(ft);
     }
     for(County* c : member_counties)
     {
-        c->normalize_shipping_weight(ft, norm);
+        //Also sets each individual premises' (incl. markets) origin weight
+        //to its unnormalized weight / the norm (sum across all premises and markets in state).
+        c->normalize_shipping_weights(ft, o_norm);
     }
 }
 
 void State::update_shipping_rate(Farm_type* ft)
 {
-    double temp_oweight = 0.0;
+    double counties_oweight_sum = 0.0;
     for(County* c : member_counties)
     {
-        temp_oweight += c->get_o_farm_weight_sum(ft);
+        //Removed * c->get_county_ocov_weight(ft) from this expr. since cov weight is included at
+        //the farm level (see County::update_covariate_weights). I think this is correct.
+        counties_oweight_sum += c->get_o_unnormalized_prem_weight_sum(ft);
     }
-    shipping_rates[ft] = temp_oweight * null_lambda_map.at(ft);
+    shipping_rates[ft] = counties_oweight_sum * null_lambda_map.at(ft);
 }
 
 int State::generate_daily_shipments(Farm_type* ft, int days_rem)
@@ -309,44 +364,52 @@ void State::all_initialized()
     }
 }
 
-int State::get_n_farms() const
+int State::get_n_premises() const
 {
     int sum = 0;
     for (auto c : member_counties){
-    	sum += c->get_n_farms();
+    	sum += c->get_n_premises();
     }
     return sum;
 }
 
-int State::get_n_farms(Farm_type* ft) const
+int State::get_n_premises(Farm_type* ft) const
 {
     int sum = 0;
     for (auto c : member_counties){
-    	sum += c->get_n_farms(ft);
+    	sum += c->get_n_premises(ft);
     }
     return sum;
 }
 
-int State::get_farms(std::vector<Farm*>& farm_v) const
-{
-    for(Farm_type* ft : farm_types_present)
-    {
-        get_farms(farm_v, ft);
-    }
-    return 0;
-}
+//int State::get_premises(std::vector<Farm*>& farm_v) const
+//{
+//    for(Farm_type* ft : farm_types_present)
+//    {
+//        get_premises(farm_v, ft);
+//    }
+//    return 0;
+//}
+//
+//int State::get_premises(std::vector<Farm*>& farm_v, Farm_type* ft) const
+//{
+//    for(County* c : member_counties)
+//    {
+//        std::vector<Farm*> local_farms = c->get_premises(ft);
+//        farm_v.insert(farm_v.end(), local_farms.begin(), local_farms.end());
+//    }
+//    return 0;
+//}
 
-int State::get_farms(std::vector<Farm*>& farm_v, Farm_type* ft) const
+double State::get_total_farm_weight(Farm_type* ft)
 {
+    double weight_sum = 0.0;
     for(County* c : member_counties)
     {
-        std::vector<Farm*> local_farms = c->get_farms(ft);
-        farm_v.insert(farm_v.end(), local_farms.begin(), local_farms.end());
+        weight_sum += c->get_o_unnormalized_prem_weight_sum(ft);
     }
-    return 0;
+    return weight_sum;
 }
-
-
 
 void State::print_bools()
 {

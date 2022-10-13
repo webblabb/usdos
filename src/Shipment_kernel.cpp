@@ -9,31 +9,41 @@ std::vector<double> Shipment_kernel::binned_distances;
 Shipment_kernel::Shipment_kernel(double a, double b, std::string type, bool binning_on) :
     a(a), b(b), binning_on(binning_on)
 {
-
-    if(type.compare("original USAMM") == 0)
+    if(type.compare("USAMMv1") == 0)
     {
         k_function = &Shipment_kernel::linear_distance_kernel;
         d_function = &Shipment_kernel::linear_euclidean;
+        binning_function = &Shipment_kernel::get_bin_USAMMv2;
+    }
+    else if(type.compare("USAMMv3") == 0)
+    {
+        k_function = &Shipment_kernel::local_kernel_from_half_and_R_func;
+        d_function = &Shipment_kernel::linear_euclidean;
+        binning_function = &Shipment_kernel::get_bin_USAMMv3;
     }
     else if(type.compare("quadratic") == 0)
     {
         k_function = &Shipment_kernel::quadratic_distance_kernel;
         d_function = &Shipment_kernel::quadratic_euclidean;
+        binning_function = &Shipment_kernel::get_bin_USAMMv2;
     }
     else if(type.compare("power_exp") == 0)
     {
         k_function = &Shipment_kernel::power_exp_from_half_and_R_func;
         d_function = &Shipment_kernel::linear_euclidean;
+        binning_function = &Shipment_kernel::get_bin_USAMMv2;
     }
     else if(type.compare("one_minus_exp") == 0)
     {
         k_function = &Shipment_kernel::one_minus_exp_from_half_and_R_func;
         d_function = &Shipment_kernel::linear_euclidean;
+        binning_function = &Shipment_kernel::get_bin_USAMMv2;
     }
     else if(type.compare("local") == 0)
     {
         k_function = &Shipment_kernel::local_kernel_from_half_and_R_func;
         d_function = &Shipment_kernel::linear_euclidean;
+        binning_function = &Shipment_kernel::get_bin_USAMMv2;
     }
     else
     {
@@ -148,7 +158,7 @@ void Shipment_kernel::set_bins_peters(int no_sub_ints){
     }
 }
 
-double Shipment_kernel::get_bin(double d)
+double Shipment_kernel::get_bin_USAMMv2(double d)
 {
     //Binary search for the correct bin of d
     bool done = false;
@@ -199,6 +209,29 @@ double Shipment_kernel::get_bin(double d)
     return -1;
 }
 
+double Shipment_kernel::get_bin_USAMMv3(double d)
+{
+    d /= 1000.0; //To km.
+    if(d < 0 )
+    {
+        std::cout << "Negative distance in distance binning function." << std::endl;
+        exit(EXIT_FAILURE);
+    }
+    else if(d >= 0 and d < 100)
+    {
+        return 1000.0 * int(d + 0.5);
+    }
+    else if(d >= 100 and d < 1000)
+    {
+        return 1000.0 * int((d / 10) + 0.5) * 10;
+    }
+    else
+    {
+        // d >= 1000
+        return 1000.0 * int((d / 100) + 0.5) * 100;
+    }
+}
+
 double Shipment_kernel::linear_distance_kernel(double d)
 {
     return std::exp(-std::pow(d/a,b));
@@ -239,19 +272,19 @@ double Shipment_kernel::linear_euclidean(County* c1, County* c2)
     double d;
     if(c1 == c2)
     {
-        d = sqrt(c1->get_area()) * 0.5214;
+        d = std::sqrt(c1->get_area()) * 0.5214;
     }
     else
     {
         const Point* p1 = c1->get_centroid();
         const Point* p2 = c2->get_centroid();
         d = sqrt((p1->x - p2->x) * (p1->x - p2->x) +
-                (p1->y - p2->y) * (p1->y - p2->y));
+                 (p1->y - p2->y) * (p1->y - p2->y));
     }
 
     if(binning_on)
     {
-        d = get_bin(d);
+        d = (this->*binning_function)(d);
     }
     return d;
 }
@@ -273,7 +306,7 @@ double Shipment_kernel::quadratic_euclidean(County* c1, County* c2)
 
     if(binning_on)
     {
-        d = get_bin(d);
+        d = (this->*binning_function)(d);
     }
     return d;
 }
