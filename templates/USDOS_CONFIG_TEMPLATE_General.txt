@@ -1,0 +1,178 @@
+## One variable per row, comments start with #
+## Empty rows ignored. Rows with numbers and without descriptions are placeholders for future variables.
+## Arguments not provided should be replaced with '*'.
+## Values in parentheses are the index in the vector where value is stored.
+## '~' after the value indicates that this value is required
+## '+' after the value indicates that one of these adjacent options is required
+## 'x' after the value indicates that this feature is not yet functional
+
+######################## Output settings ########################
+BATCH_NAME #(1) Batch name, used as prefix for output files. Only letters, numbers and underscore.
+1 #(2) Summary output on/off (1/0) - one line per replicate with summary information (specific metrics will vary with run settings, but examples include total number of infected premises, duration, seed info, run time, and control measures applied)
+1 #(3) Detailed infection output on/off (1/0) - one line per exposure with information about the exposure event (such as time, source of infection, route of infection, and whether control measures were effective in preventing the exposure)
+0 #(4) Print grid cells on/off (1/0)
+0 #(5)xAdditional functionality under development. Do not change default. 
+0 #(6)x Additional functionality under development. Do not change default. 
+* #(7)
+* #(8)
+* #(9)
+* #(10)
+
+######################## General settings ########################
+FLAPS_LOCATION #(11)~Name of file containing premises ID, FIPS, x, y, lat, long, premises class (b,d,f,m), beef herd size, dairy herd size. Beef and dairy herd sizes can be either one column each with yearly herd sizes (i.e. [bY, dY]), or four columns each with quarterly herd sizes (i.e. [b1, b2, b3, b4, d1, d2, d3, d4]. Premises classes (b,d,f,m) are beef, dairy, feedlot, market. Make sure the premises file doesn't have numbers in 1e+05 format (may happen with IDs)
+beef,dairy 			#(12)~List of species for which counts are provided in premises file, comma-separated
+60 	#(13)~Timesteps to run (in days for foot and mouth disease (FMD))
+*	#(14) Max infected premises before stopping an outbreak (* = no limit)
+1 	#(15)~Verbose level: Output extra information to console as model runs (0=off, 1=basic steps, 2=debug)
+0 	#(16) Do not change default.
+0 	#(17)~Reverse x/y option: if input file is entered as lat/long (y/x) set to 1, and if long/lat (x/y) set to 0 (default)
+inputfiles/FIPS_updated_new.txt #(18)~Name of file containing FIPS name, state name, area (m2), x, y. Tab separated.
+0	#(19) Day of the year to start simulation (Jan 1 = day 1). Must be 0 - 365. 0 = random day [1-365]. 
+0 #(20) x Additional functionality under development. Do not change default. 
+allFips #(21)~Seed source: filename or "allFips". "allFips" chooses one random premises from each county containing premises. Filename is of a file containing identifiers (FIPS codes or premisesIDs) from which to seed infection, one line per simulation.
+fips 		#(22)~Seed file type: type of information on each line of the file named in (21). "fips" = choose 1 premises at random within the FIPS code on a given line in (21), "singlePremises" = use the premisesID provided on a given line in (21), "multiplePremises" = use all comma separated premisesIDs on a given line in (21)
+0 #(23) +Controls market behavior with regard to within-herd spread. This is a real number probability (range [0,1], default = 0.5) that a shipment from an infected market transmits infection. 
+
+######################## FMD Infection-related settings ########################
+1,1 #(24)~Susceptibility exponents(q), species-specific & comma-separated in order listed in (12)
+1,1	#(25)~Transmissibility (infectiousness) exponents(p), species-specific & comma-separated in order listed in (12)
+1,1	#(26)~Susceptibility constants(S), species-specific & comma-separated in order listed in (12)
+10.252,10.252 #(27)~Transmissibility (infectiousness) constants(T), species-specific & comma-separated in order listed in (12)
+0 #(28)~Kernel type for local (diffusion) spread: 0: k1/(1 + (distance/k2)^k3), 1: data file in (30), 2: k1/(1+d/k2)^k3
+1.46e-08,1686.155,2.267 #(29)x~Kernel parameters k1, k2, k3
+* #(30) Name of file containing data-based local spread probabilities by distance, ie inputfiles/UKDataKernel.txt
+5,0 #(31)~Mean, standard deviation (around normal) timesteps from premises exposure to infectiousness (latency duration)
+20,0 #(32)~Mean, standard deviation (around normal) timesteps from premises infectiousness to immunity (infectiousness duration)
+1	#(33)+Partial transition flag 0: off, 1: on
+0.05,0.006,0.44,4,6.30852 #(34)+Partial transition parameters: r0 (0.05), r1 (0.006), gamma (0.44), tS0 (4), scaling factor.
+* #(35)
+
+######################## Grid-related settings ########################
+* 				#(36)+Filename containing grid cells (will override other options)
+* 				#(37)+Length of cell side for uniform cells (will override density options)
+500,100000 	#(38)+Max farms per cell, cell size minimum side length in m
+* #(39)
+* #(40)
+
+######################## Shipment-related settings ########################
+5 #(41)~Method to generate county-county shipments (USAMM), comma-separated (0: shipments off; 1: USAMMv1; 3: USAMMv2 kernel 1; 4: USAMMv2 kernel 2; 5: USAMMv2 kernel 3)
+* #(42)
+* #(43)
+inputfiles/beef_k3_cov.post, inputfiles/dairy_k3_cov.post #(44) USAMM posterior files. Must match method selected in (41). Comma-separated, one file for each species.
+Q1,Q2,Q3,Q4 #(45) The order in which the in which the temporal switching of USAMM parameters should happen. Comma separated, time periods exactly as the temporal component of the USAMM parameter names in the file in option 44.
+1,91,182,274 #(46) Day of the year (Jan 1 = day 1) where each time period begins. Comma separated integers. Assume no leap years.
+inputfiles/county_covariates_scaled_mean_zero.txt,inputfiles/county_covariates_scaled_mean_zero.txt #(47) Origin covariates for all counties. One file for each species, comma separated. Must have header: FIPS, name1, name2... Names must match name component of covariate parameters in USAMM parameter file.
+inputfiles/county_covariates_scaled_mean_zero.txt,inputfiles/county_covariates_scaled_mean_zero.txt #(48) Destination covariates for all counties. One file for each species, comma separated. Must have header: FIPS, name1, name2... Names must match name component of covariate parameters in USAMM parameter file.
+*,* #(49)
+1 #(50) Exposed shipments: shipping from a farm with status exposed will cause the receiver to become exposed as well. 1 = on, 0 = off. Affects FMD simulations only.
+
+######################## Control-related settings ########################
+* #(51)~Names for unique control types, comma-separated (fixed options: shipBan, cull, vax). '*' will turn off control.
+noLimit	#(52) Control constraint function types, comma-separated (fixed options: noLimit, dailyLimit, stateSum (cull only), and nationalLimit (vax only))
+7200,0	#(53) Control constraint parameters, comma-separated, SEMICOLON-separated by type. Provide a single value for a shipBan and a mean and standard deviation for cull and vax.
+premises #(54)~Spatial scale at which control is applied, comma-separated (fixed options: premises, county (shipBan only), state (shipBan only))
+NA #(55) List control constraint files here, comma-separated, SEMICOLON-separated by type
+NA #(56) Specify file types for (55), comma-separated, SEMICOLON-separated by type (fixed options: NA, resourceLocs (must be used with stateSum in line 52), resourceBoosts (must be used with nationalLimit in line 52))
+1 #(57)~Implemented to effective: mean number of timesteps, comma-separated for each control type
+0 #(58)~Implemented to effective: standard deviation number of timesteps, comma-separated for each control type
+366 #(59)~Effective to inactive: mean number of timesteps, comma-separated for each control type
+0	#(60)~Effective to inactive: standard deviation number of timesteps, comma-separated for each control type
+1,1	#(61)~Effectiveness (including compliance) of control types as proportion. Comma-separated probability of preventing exposure given exposure and probability of transmission given infectiousness. SEMICOLON-separated by type.
+* #(62)
+* #(63)~Control triggers, comma-separated (fixed options). '*' will turn off control.
+0 #(64)~Control trigger thresholds, comma-separated (numeric)
+cull #(65)~Control trigger responses, comma-separated (must exist in (51))
+0 #(66)~Control response targets, comma-separated. -1 = DCs, 0 = triggers only, # = radius in units of x/y coordinates of premises
+earliest #(67)~Control response priority, comma-separated. Options: earliest
+* #(68)
+* #(69)
+* #(70)
+
+######################## Reporting and Tracing (DC) settings ########################
+1000,0	#(71)~Mean, standard deviation timesteps from INDEX premises exposure to reporting
+1000,0	#(72)~Mean, standard deviation timesteps from non-dangerous-contact premises exposure to reporting
+1000,0	#(73)~Mean, standard deviation timesteps from dangerous-contact premises exposure to reporting
+sus,4; exp,5 #(74) Dangerous Contact scaling parameters relative to risk: status, then scale, SEMICOLON-separated (only used if at least one of (66) is -1)
+* #(75)
+* #(76)
+* #(77)
+
+######################## Additional functionality under development. Do not change. ########################
+* #(78)x Additional functionality under development. Do not change default value.
+* #(79)x Additional functionality under development. Do not change default value.
+NA #(80)x Additional functionality under development. Do not change default value.
+NA #(81)x Additional functionality under development. Do not change default value.
+* #(82)x Additional functionality under development. Do not change default value.
+NA #(83)x Additional functionality under development. Do not change default value.
+NA #(84)x Additional functionality under development. Do not change default value.
+NA #(85)x Additional functionality under development. Do not change default value.
+NA #(86)x Additional functionality under development. Do not change default value.
+NA #(87)x Additional functionality under development. Do not change default value.
+NA #(88)x Additional functionality under development. Do not change default value.
+*	#(89) Unused
+*	#(90) Unused
+NA #(91)x Additional functionality under development. Do not change default value.
+0 #(92)x Additional functionality under development. Do not change default value.
+* #(93)x Additional functionality under development. Do not change default value.
+0 #(94)x Additional functionality under development. Do not change default value.
+NA #(95)x Additional functionality under development. Do not change default value.
+* #(96)
+* #(97)
+* #(98)
+* #(99)
+
+######################## Additional functionality under development. Do not change. ########################
+0,0		#(100)~x Additional functionality under development. Do not change default value.
+0,0		#(101)x Additional functionality under development. Do not change default value.
+* #(102) Unused.
+* #(103) Unused.
+* #(104) Unused.
+* #(105) Unused.
+* #(106) Unused.
+* #(107) Unused.
+* #(108) Unused.
+NA #(109)x Additional functionality under development. Do not change default value.
+NA #(110)x Additional functionality under development. Do not change default value.
+* #(111) Unused.
+* #(112) Unused.
+* #(113) Unused.
+* #(114) Unused.
+* #(115) Unused.
+* #(116) Unused.
+* #(117) Unused.
+* #(118) Unused.
+* #(119) Unused.
+
+######################## Additional functionality under development. Do not change. ########################
+* #(120) Unused. 
+* #(121) Unused. 
+0, 0 #(122)x Additional functionality under development. Do not change default value.
+0, 0 #(123)x Additional functionality under development. Do not change default value.
+0 #(124)x Additional functionality under development. Do not change default value.
+* #(125) Unused.
+* #(126) Unused. 
+* #(127) Unused. 
+* #(128) Unused. 
+NA #(129)x Additional functionality under development. Do not change default value.
+
+########################  Additional functionality under development. Do not change. ########################
+) #(130)x Additional functionality under development. Do not change default value.
+0 #(131)x Additional functionality under development. Do not change default value.
+0 #(132)x Additional functionality under development. Do not change default value.
+0,0 #(133)x Additional functionality under development. Do not change default value.
+0,0  #(134)x Additional functionality under development. Do not change default value.
+0 #(135)x Additional functionality under development. Do not change default value.
+0 #(136)x Additional functionality under development. Do not change default value.
+* #(137) Unused.
+0, 0 #(138)x Additional functionality under development. Do not change default value.
+0, 0 #(139)x Additional functionality under development. Do not change default value.
+0 #(140)x Additional functionality under development. Do not change default value.
+0 #(141)x Additional functionality under development. Do not change default value.
+0 #(142)x Additional functionality under development. Do not change default value.
+0 #(143)x Additional functionality under development. Do not change default value.
+0 #(144)x Additional functionality under development. Do not change default value.
+0 #(145)x Additional functionality under development. Do not change default value.
+0 #(146)x Additional functionality under development. Do not change default value.
+0 #(147)x Additional functionality under development. Do not change default value.
+0 #(148)x Additional functionality under development. Do not change default value.
+* #(149) Unused.
