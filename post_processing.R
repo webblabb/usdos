@@ -1,6 +1,7 @@
 ## USDOS Results Processing ##
 # Generates plots, maps, summaries, and data files from USDOS summary and detail output files
 
+#© 2022 Colorado State University
 # Code by Deedra Murrieta & Katie Owers, edits by Lauren Smith & Sophie McKee
 
 # Summary and Detail files must be saved in the directory "Files_To_Process" in the Post_Processing directory.
