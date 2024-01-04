@@ -3,6 +3,8 @@ USDOSv2.1
 
 A USDOS user guide can be found at https://webblabb.github.io/usammusdos/usdos.html. The user guide includes full details and documentation about how to run the code.
 
+© 2022 Colorado State University
+
 ## Overview of the processes executed in "main.cpp"
 
 1. Load and set parameters from configuration file @ File_manager::readConfig
