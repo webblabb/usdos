@@ -1,5 +1,5 @@
 #### USDOS Pre-Processing Function 
-
+#© 2022 Colorado State University
 # Code by Deedra Murrieta & Katie Owers,
 
 #####################################################################################################################################
