@@ -1,3 +1,4 @@
+//© 2022 Colorado State University
 // main.cpp - controls timesteps, initiating various managers, and output
 #include <iostream>
 #include <ctime>
