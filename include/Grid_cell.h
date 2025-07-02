@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 #ifndef grid_cell_h
 #define grid_cell_h
 

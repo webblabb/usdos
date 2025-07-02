@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 /* Base class for county, state and grid cells. */
 
 #ifndef REGION_H

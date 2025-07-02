@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 #include <stdio.h>
 #include <iostream>
 #include <sstream>
@@ -69,7 +70,6 @@ double Farm::get_shipment_rate()
                   << "without first updating it's shipping rate. Exiting." << std::endl;
         exit(EXIT_FAILURE);
     }
-
     return latest_shipping_rate;
 }
 
@@ -140,7 +140,7 @@ void Farm::set_quarterlySpeciesCounts(int ft_idx, std::string ft_name, std::vect
 {
     if(int(speciesCountsQuarterly.size()) < ft_idx+1)
     {
-        speciesCountsQuarterly.emplace_back(sp_count);
+        speciesCountsQuarterly.push_back(sp_count);
     }
     else
     {
@@ -229,21 +229,9 @@ void Farm::set_neighborRadiusCalculated(const double radius)
 }
 
 
-Farm_type::Farm_type(std::string herd, std::vector<std::string> in_species, unsigned int index) :
-    index(index),
-    herd(herd)
+Farm_type::Farm_type(std::string species, unsigned int index) :
+    species(species), index(index)
 {
-    std::stringstream ss;
-    for(size_t i = 0; i < herd.size(); i++)
-    {
-        if(herd[i] != '0')
-        {
-           ss << in_species[i] << ", ";
-        }
-    }
-    species = ss.str();
-    species.pop_back(); // get rid of last space
-    species.pop_back(); // get rid of last comma
 }
 
 Farm_type::~Farm_type()

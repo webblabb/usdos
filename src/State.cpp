@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 #include "State.h"
 #include "Farm.h"
 #include "County.h"
@@ -56,14 +57,24 @@ void State::add_county(County* in_county)
     }
 }
 
-void State::set_a(double in_a, Farm_type* in_type)
+void State::set_aCVI(double in_a, Farm_type* in_type)
 {
-    a_map[in_type] = in_a;
+    aCVI_map[in_type] = in_a;
 }
 
-void State::set_b(double in_b, Farm_type* in_type)
+void State::set_bCVI(double in_b, Farm_type* in_type)
 {
-    b_map[in_type] = in_b;
+    bCVI_map[in_type] = in_b;
+}
+
+void State::set_aCOM(double in_a, Farm_type* in_type)
+{
+    aCOM_map[in_type] = in_a;
+}
+
+void State::set_bCOM(double in_b, Farm_type* in_type)
+{
+    bCOM_map[in_type] = in_b;
 }
 
 void State::set_N(double in_N, Farm_type* in_type)
@@ -101,19 +112,34 @@ void State::set_kurt(double in_kurt, Farm_type* in_type)
     kurt_map[in_type] = in_kurt;
 }
 
-void State::set_inflow(double in_inflow, Farm_type* in_type)
+void State::set_inflowCVI(double in_inflow, Farm_type* in_type)
 {
     size_t ft_idx = size_t(in_type->get_index());
-    if(inflow_vec.size() < ft_idx+1)
+    if(inflowCVI_vec.size() < ft_idx+1)
     {
-        inflow_vec.resize(ft_idx+1);
+        inflowCVI_vec.resize(ft_idx+1);
     }
-    inflow_vec[ft_idx] = in_inflow;
+    inflowCVI_vec[ft_idx] = in_inflow;
 }
 
-void State::set_outflow(double in_outflow, Farm_type* in_type)
+void State::set_outflowCVI(double in_outflow, Farm_type* in_type)
 {
-    outflow_map[in_type] = in_outflow;
+    outflowCVI_map[in_type] = in_outflow;
+}
+
+void State::set_inflowCOM(double in_inflow, Farm_type* in_type)
+{
+    size_t ft_idx = size_t(in_type->get_index());
+    if(inflowCOM_vec.size() < ft_idx+1)
+    {
+        inflowCOM_vec.resize(ft_idx+1);
+    }
+    inflowCOM_vec[ft_idx] = in_inflow;
+}
+
+void State::set_outflowCOM(double in_outflow, Farm_type* in_type)
+{
+    outflowCOM_map[in_type] = in_outflow;
 }
 
 int State::get_code()
@@ -126,14 +152,24 @@ std::string State::get_code_str()
     return std::to_string(this->get_code());
 }
 
-double State::get_a(Farm_type* ft)
+double State::get_aCVI(Farm_type* ft)
 {
-    return a_map[ft];
+    return aCVI_map[ft];
 }
 
-double State::get_b(Farm_type* ft)
+double State::get_bCVI(Farm_type* ft)
 {
-    return b_map[ft];
+    return bCVI_map[ft];
+}
+
+double State::get_aCOM(Farm_type* ft)
+{
+    return aCOM_map[ft];
+}
+
+double State::get_bCOM(Farm_type* ft)
+{
+    return bCOM_map[ft];
 }
 
 double State::get_N(Farm_type* ft)
@@ -166,14 +202,24 @@ double State::get_s(Farm_type* ft)
     return s_map[ft];
 }
 
-double State::get_inflow(Farm_type* ft)
+double State::get_inflowCVI(Farm_type* ft)
 {
-    return inflow_vec[ft->get_index()];
+    return inflowCVI_vec[ft->get_index()];
 }
 
-double State::get_outflow(Farm_type* ft)
+double State::get_outflowCVI(Farm_type* ft)
 {
-    return outflow_map[ft];
+    return outflowCVI_map[ft];
+}
+
+double State::get_inflowCOM(Farm_type* ft)
+{
+    return inflowCOM_vec[ft->get_index()];
+}
+
+double State::get_outflowCOM(Farm_type* ft)
+{
+    return outflowCOM_map[ft];
 }
 
 std::unordered_map<Farm_type*, double> State::get_null_lambda_map()
@@ -236,8 +282,8 @@ void State::set_shipping_parameters_v1(USAMMv2_parameters& usamm_par,
         double N = usamm_par.get_N(state_code, time_period);
         double daily_N = N / 365;
         double s = usamm_par.get_s(state_code, time_period);
-        set_a(a, ft);
-        set_b(b, ft);
+        set_aCVI(a, ft);
+        set_bCVI(b, ft);
         set_N(N, ft);
         set_N_per_day(daily_N, ft);
         set_s(s, ft);
@@ -275,8 +321,8 @@ void State::set_shipping_parameters_v2(USAMMv2_parameters& usamm_par,
         double s = usamm_par.get_s(state_code, time_period);
         double stdev = usamm_par.get_std(state_code, time_period);
         double kurt = usamm_par.get_kurt(state_code, time_period);
-        set_a(a, ft);
-        set_b(b, ft);
+        set_aCVI(a, ft);
+        set_bCVI(b, ft);
         set_null_lambda(null_lambda, ft);
         set_s(s, ft);
         set_std(stdev, ft);
@@ -287,13 +333,24 @@ void State::set_shipping_parameters_v3(USAMMv3_parameters& usamm_par,
                                        Farm_type* ft, std::string time_period,
                                        size_t days_rem)
 {
-        std::pair<double, double> ab = usamm_par.get_ab(id, time_period);
-        double inflow = usamm_par.get_inflow(id, time_period);
-        double outlflow = usamm_par.get_outflow(id, time_period);
-        set_a(ab.first, ft);
-        set_b(ab.second, ft);
-        set_inflow(inflow, ft);
-        set_outflow(outlflow, ft);
+        std::pair<double, double> abCVI = usamm_par.get_abCVI(state_code, time_period);
+        double inflowCVI = usamm_par.get_inflowCVI(state_code, time_period);
+        double outlflowCVI = usamm_par.get_outflowCVI(state_code, time_period);
+        set_aCVI(abCVI.first, ft);
+        set_bCVI(abCVI.second, ft);
+        set_inflowCVI(inflowCVI, ft);
+        set_outflowCVI(outlflowCVI, ft);
+
+        if(usamm_par.getUSAMMv3SpeciesCode() == "s") //Swine so add commuter parameters.
+        {
+            std::pair<double, double> abCOM = usamm_par.get_abCOM(state_code, time_period);
+            double inflowCOM = usamm_par.get_inflowCOM(state_code, time_period);
+            double outlflowCOM = usamm_par.get_outflowCOM(state_code, time_period);
+            set_aCOM(abCOM.first, ft);
+            set_bCOM(abCOM.second, ft);
+            set_inflowCOM(inflowCOM, ft);
+            set_outflowCOM(outlflowCOM, ft);
+        }
 }
 
 int State::generate_shipments_N(Farm_type* ft, int days_rem)

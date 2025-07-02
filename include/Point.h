@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 /* Little struct that describes a point in a cartesian xy plane */
 
 #ifndef POINT_H

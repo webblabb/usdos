@@ -1,4 +1,4 @@
-//© 2022 Colorado State University
+//© 2024 Colorado State University
 // main.cpp - controls timesteps, initiating various managers, and output
 #include <iostream>
 #include <ctime>
@@ -10,6 +10,9 @@
 #include "Shipment_manager.h"
 #include "County.h"
 
+#include "shared_functions.h"
+#include <gsl/gsl_matrix.h>
+#include <gsl/gsl_blas.h>
 
 int verboseLevel; // global variable determining console output
 
@@ -132,14 +135,14 @@ if(verbose>0){
 	std::cout << seedFarmsByRun.size() << " seed premises generated." << std::endl;
 }
 
-	if (seedFarmsByRun.size() == 0 ){
-	  std::cout << "ERROR: No valid seed farms provided/located. Exiting... ";
-	  exit(EXIT_FAILURE);
-	}
+    if (seedFarmsByRun.size() == 0 ){
+      std::cout << "ERROR: No valid seed farms provided/located. Exiting... ";
+      exit(EXIT_FAILURE);
+    }
 
-        if(verbose>0){
-            if(p->infectionType == InfectionType::FMD and p->partial==1) std::cout << "FMD like within herd dynamics will be implemented." << std::endl;
-        }
+    if(verbose>0){
+        if(p->infectionType == InfectionType::FMD and p->partial==1) std::cout << "FMD like within herd dynamics will be implemented." << std::endl;
+    }
 
     //~~~~~~~~~~~~~~~~~~ Loop starts here
     for (size_t r=1; r<=seedFarmsByRun.size(); r++){
@@ -161,7 +164,7 @@ if(verbose>0){
         G.updateQuarterlyFarmSizes(current_quarter);
 
         Status_manager Status(seedFarms, p, &G, &Control, &Diagnostic); // seeds initial exposures, provides parameters, grid, control, diagnostic
-        Shipment_manager Ship(fipsvec, fipsSpeciesMap, &Status, p->species, p); // modify to pass grid manager, p
+        Shipment_manager Ship(fipsvec, fipsSpeciesMap, p);
         Grid_checker gridCheck(allCells, &Status, p);
         // control resources
 
@@ -178,11 +181,11 @@ if(verbose>0){
         std::vector<Farm*> focalFarmsShipments; //Stores both infectious and exposed premises for the shipment component.
         bool potentialTx = 1;
 
-      int t_in_days = 1; //timestep as days, will be same as t for fmd.
-      int last_quarter = 0; // 0 = Jan-Mar, 1 = Apr-Jun, 2=Jul-Sep, 3=Oct-Dec.
-      std::vector<Shipment*> rep_shipments; //Just to keep track of all shipments created during the replicate so they can be accessed and deleted.
-      rep_shipments.reserve(100000);
-      while (t<timesteps && potentialTx){ // timesteps, stop early if dies out
+        int t_in_days = 1; //timestep as days, will be same as t for fmd.
+        int last_quarter = 0; // 0 = Jan-Mar, 1 = Apr-Jun, 2=Jul-Sep, 3=Oct-Dec.
+        std::vector<Shipment*> rep_shipments; //Just to keep track of all shipments created during the replicate so they can be accessed and deleted.
+        rep_shipments.reserve(100000);
+        while (t<timesteps && potentialTx){ // timesteps, stop early if dies out
             std::clock_t timestep_start = std::clock();
 
             ++t; // starts at 1, ends at timesteps
@@ -385,18 +388,38 @@ if(verbose>0){
                 }
 
                 // write output for details of exposures from this rep, t
-                if (p->printDetail > 0){
+                if (p->printDetail > 0)
+                {
                     // output detail to file
                     // rep, ID, time, sourceID, route, prevented
                     std::string detOutFile = batchDateTime;
                     detOutFile += "_detail.txt";
                     if (r==1 && t==1){
-                        std::string header = "Rep\tExposedID\tatTime\tSourceID\tInfRoute\tControlPrevented\tExposedCounty\tSourceCounty\n";
+                        std::string header = "Rep\tExposedID\tatTime\tSourceID\tInfRoute\tControlPrevented\tExposedCounty\tSourceCounty";
+                        header+="\n";
                         printLine(detOutFile,header);
                     }
                     std::string printString = Status.formatDetails(r,t);
                     printLine(detOutFile, printString);
                 }
+          
+              if (p->printControl > 0 && p->control_on == 1)
+              {
+            // output summary to file (rep, days inf, run time)
+            // rep, # farms infected, # days of infection, seed farm and county, run time
+                    std::string controlOutFile = batchDateTime;
+                    controlOutFile += "_controlSummary.txt";
+                    if (r==1 && t==1)
+                    {
+                        std::cout<<"MAIN::seting up controlSummary file"<<std::endl;
+                        std::stringstream ss;
+                        std::string header = ss.str() + "Rep\ttStep\tfarmID\tFIPS\tcontrolStatus";
+                        header+="\n";
+                        printLine(controlOutFile,header);
+                    }
+                    std::string repOut = Status.formatControlSummary(r,t);
+                    printLine(controlOutFile,repOut);
+               }
 
                 //Are there any prems that can still transmit? If not, end FMD sim.
                 potentialTx = (numPotentialTx>0 && numSuscept>0);
@@ -435,7 +458,21 @@ if(verbose>0){
             double repTimeMS = 1000.0 * (rep_end - rep_start) / CLOCKS_PER_SEC;
             std::cout << "CPU time for batch "<<batchDateTime<<", seed source #"<<r<<" of "
                       <<seedFarmsByRun.size()<<" ("<<t<<" timesteps): " << repTimeMS << "ms." << std::endl;
-
+            if(p->printControl == 2 && p->control_on == 1){
+                // output summary to file (rep, days inf, run time)
+                // rep, # farms infected, # days of infection, seed farm and county, run time
+                std::string waitlistOutFile = batchDateTime;
+                        waitlistOutFile += "_waitlistSummary.txt";
+                        if (r==1)
+                        {
+                            std::stringstream ss;
+                            std::string header = ss.str() + "Rep\ttStep\tfarmID\tFIPS\tcontrolStatus";
+                            header+="\n";
+                            printLine(waitlistOutFile,header);
+                        }
+                        std::string repOut = Status.formatWaitlistSummary(r,t);
+                        printLine(waitlistOutFile,repOut);
+            }
             if (p->printSummary > 0)
             {
                 // output summary to file (rep, days inf, run time)
@@ -513,7 +550,6 @@ if(verbose>0){
                 std::string repOut = Status.formatRepSummary(r,t,repTimeMS);
                 printLine(sumOutFile,repOut);
             }
-
             //Delete all the generated shipments.
             for(size_t shp_idx=0; shp_idx<rep_shipments.size(); ++shp_idx)
             {
@@ -533,12 +569,15 @@ else if(gen_shipment_network)
                   << " Activate and rerun. Exiting..." << std::endl;
         exit(EXIT_FAILURE);
     }
+
+    std::cout << "Generating shipments..." << std::endl;
     for(int netw_number=1; netw_number<=n_networks; netw_number++)
     {
+        std::cout << netw_number << "/" << n_networks << "\r" << std::flush;
         if(p->usamm_version == 1 or p->usamm_version == 2)
         {
             G.initShippingParametersUSAMMv2(1, p->start_day);
-            Shipment_manager Ship(fipsvec, fipsSpeciesMap, p->species, p);
+            Shipment_manager Ship(fipsvec, fipsSpeciesMap, p);
             std::vector<std::string> network_out_files;
             std::string netw_number_s = std::to_string(netw_number);
             for(std::string s : p->species)
@@ -551,7 +590,7 @@ else if(gen_shipment_network)
         {
             //Make USAMMv3 network here.
             G.initShippingParametersUSAMMv3(1, p->start_day);
-            Shipment_manager Ship(fipsvec, fipsSpeciesMap, p->species, p);
+            Shipment_manager Ship(fipsvec, fipsSpeciesMap, p);
             std::vector<std::string> network_out_files;
             std::string netw_number_s = std::to_string(netw_number);
             for(std::string s : p->species)
@@ -561,6 +600,7 @@ else if(gen_shipment_network)
             Ship.makeNetworkUSAMMv3(network_out_files, G);
         }
     }
+    std::cout << "...done." << std::endl;
 }
 
     std::clock_t process_end = std::clock();

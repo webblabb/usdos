@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 #ifndef Diagnostic_resource_h
 #define Diagnostic_resource_h
 

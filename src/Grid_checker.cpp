@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 #include "Grid_checker.h"
 
 /// Makes shallow copy of Grid_cells to start as susceptible. Only the vector of pointers

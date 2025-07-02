@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 #include "File_manager.h"
 #include <fstream>
 
@@ -99,6 +100,13 @@ void File_manager::readConfig(std::string& cfile, bool generate_network)
 		if (pv[12]=="*"){
 			std::cout << "ERROR (config 12): No species list provided." << std::endl; exitflag=1;}
 		params.species = stringToStringVec(pv[12]);
+		for(const auto& sp_name : params.species)
+        {
+            if(sp_name != "beef" and sp_name != "dairy" and sp_name != "swine")
+            {
+                std::cout << "ERROR (config 12): List of species must consist of \"beef\", \"dairy\" or \"swine\". Found " << sp_name << "." << std::endl; exitflag=1;
+            }
+        }
 
 		// Timesteps
 		if(generate_network)
@@ -519,12 +527,19 @@ if(params.control_on == true){
 			std::cout << "ERROR (config 53 and 61): Different number of arguments and control types." << std::endl;
 			exitflag=1;
 			}
-		// pv[62]
+		//Flexible control implimentation
+		params.flexibleControl = pv[62];
+	//	std::string options_flex = "flex,*";
+			if (verbose>1){if(pv[62].compare("flex")==0){std::cout<< "Flexible control option initiated."<<std::endl;
+						  }else{std::cout<<"Flexible control option off."<<std::endl;}}
+		//	options = stringToStringVec(options_flex);
+		//	std::vector<std::string> flexoption = stringToStringVec(pv[62]);
+		//	checkExit = limitedValues(flexoption, options, 62); if (checkExit==1){exitflag=1;} //gets in the way...
 		// Control rules
 		std::vector<std::string> triggers = stringToStringVec(pv[63]);
 			std::string options_triggers = "newPremReportsOverX,newRegionReportsOverX";
 			options = stringToStringVec(options_triggers);
-			checkExit = limitedValues(triggers, options, 63); if (checkExit==1){exitflag=1;}
+		//	checkExit = limitedValues(triggers, options, 63); if (checkExit==1){exitflag=1;}
 		std::vector<double> thresholds = stringToNumVec(pv[64]);
 			checkExit = checkPositive(thresholds, 64); if (checkExit==1){exitflag=1;}
 			if (thresholds.size() != triggers.size()){
@@ -549,19 +564,20 @@ if(params.control_on == true){
 
 // Should also check that any regional control types (scale != premises) can only have target=0
 		std::vector<std::string> orders = stringToStringVec(pv[67]);
-			std::string options_orders = "earliest"; // can add "largest, closest" later
+			std::string options_orders = "earliest,largest,closest,farthest,smallest"; // can add "largest, closest" later
 			options = stringToStringVec(options_orders);
 			checkExit = limitedValues(orders, options, 51); if (checkExit==1){exitflag=1;}
 			if (orders.size() != triggers.size()){
 			std::cout << "ERROR (config 63 and 67): Different number of arguments and control triggers." << std::endl;
 			exitflag=1;
 			}
+		std::string fCFiles = pv[68];
+		if (verbose>1){std::cout<< "Flexible control file: " << pv[68]<<std::endl;}
 
-		//pv[68]... pv[70]
+		//pv[69]... pv[70]
 			// Put control parameters into proper containers
 			for (size_t ct2 = 0; ct2 < params.controlTypes.size(); ++ct2){
 				std::string c_type = params.controlTypes.at(ct2);
-
 				params.controlScales[c_type] = spatialScales.at(ct2);
 				params.constraintFunctions[c_type] = cFuncs.at(ct2);
 				params.constraintFuncParams[c_type] = stringToNumVec(cFuncParams.at(ct2));
@@ -576,8 +592,67 @@ if(params.control_on == true){
 				params.effectiveness[c_type] = std::make_tuple(effectVector.at(0), effectVector.at(1));
 			}	// end "for each control type"
 
-			// Put control rules into containers
-			for (size_t cr = 0; cr < triggers.size(); cr++){
+			
+			params.flexibleControlFiles = fCFiles;
+			
+			//Put flexible control parameters from "flex.txt" into proper controlRule
+			if ((params.flexibleControl).compare("flex") == 0){
+
+				if (verbose>1){std::cout << "FM: entering flexibleControlUpdateFile" << std::endl;}
+
+				std::string controlUpdateFile = params.flexibleControlFiles;
+
+					std::ifstream f(controlUpdateFile);
+					if(!f){std::cout << "FM: Flexible control file not found. Check config 68. Exiting..." << std::endl; exit(EXIT_FAILURE);}
+
+					if(f.is_open())
+					{
+					  skipBOM(f);
+				    if (verbose>0){std::cout << "FM: Flexible control file open, loading thresholds..." << std::endl;}
+
+						while(! f.eof())
+						{
+                            std::string line;
+							getline(f, line); // get line from file "f", save as "line"
+							std::vector<std::string> line_vector = split(line, '\t'); // separated by space
+								if(! line_vector.empty()) // if line_vector has something in it
+								{
+                                    for (size_t cr = 0; cr < (line_vector.size()); cr+=6){  //could generalize this line of code, but is fully functional
+                                        if (line_vector[cr]!="percentIncrease" && line_vector[cr+5]!="0") {
+                                            std::cout << "ERROR (config 68): Flexible control file has incorrect format. Problematic line is: "<< line_vector[cr]<< " and " << line_vector[cr+5] <<". \n Set decision delay equal to 0 when percentIncrease is not the control trigger. Exiting..." << std::endl;
+
+                                            exit(EXIT_FAILURE);
+                                        }
+                                        params.controlRules.emplace_back(					//with current flexible control implementation.
+											controlRule{									//Works with a flex.txt file with 6 columns: trigger type, threshold, control action,
+												line_vector[cr],							//targets, prioritization, decision delay.
+												stringToNum<double>(line_vector[cr+1]),
+												line_vector[cr+2],
+												stringToNum<double>(line_vector[cr+3]),
+												line_vector[cr+4],
+												stringToNum<double>(line_vector[cr+3])*stringToNum<double>(line_vector[cr+3]),
+                                                stringToNum<double>(line_vector[cr+5])
+											});
+
+										if(verbose>1){std::cout<<' '<<line_vector[cr];
+											std::cout<<' '<<line_vector[cr+1];
+											std::cout<<' '<<line_vector[cr+2];
+											std::cout<<' '<<line_vector[cr+3];
+											std::cout<<' '<<line_vector[cr+4];
+                                            std::cout<<' '<<line_vector[cr+5]<<std::endl;
+										}
+
+										if (stringToNum<double>(line_vector[cr+3]) == -1){
+											params.dangerousContacts_on = 1;
+											params.dcControlTypes.emplace_back(line_vector[cr+2]); // Put control rules into containers
+										}
+									}
+								} // end if line has something in it
+					} // end while not end of file
+				} // if file is open
+				if(verbose > 1){std::cout << "Flexible control has " << (params.controlRules).size() << " steps." << std::endl;}
+			} else {
+				for (size_t cr = 0; cr < triggers.size(); cr++){
 				params.controlRules.emplace_back(
 					controlRule{
 						triggers[cr],
@@ -585,14 +660,16 @@ if(params.control_on == true){
 						actions[cr],
 						targets[cr],
 						orders[cr],
-						targets[cr]*targets[cr] // radius squared, stored pre-calculated for speed
-					});
-				if (targets[cr] == -1){
-					params.dcControlTypes.emplace_back(actions[cr]);
+						targets[cr]*targets[cr], // radius squared, stored pre-calculated for speed
+                        0 // decision delay initialized with 0. Only used during flexible control strategy runs.
+                    });
+					if (targets[cr] == -1){
+						params.dcControlTypes.emplace_back(actions[cr]); // Put control rules into containers
+					}
 				}
 			}
-
 		}
+
 
 // diagnostics
 
@@ -665,16 +742,16 @@ if(params.diagnostic_on == true){
 			exitflag=1;
 			}
 		// Diagnostic - sensitivity of each diagnostic: mean
-		std::vector<double> sensAllAphas = stringToNumVec(pv[87]);
-		checkExit = checkPositive(sensAllAphas, 87); if (checkExit==1){exitflag=1;}
-		if (sensAllAphas.size() != params.diagnosticTypes.size()){
+		std::vector<double> sensAllMeans = stringToNumVec(pv[87]);
+		checkExit = checkPositive(sensAllMeans, 87); if (checkExit==1){exitflag=1;}
+		if (sensAllMeans.size() != params.diagnosticTypes.size()){
 			std::cout << "ERROR (config 79 and 87): Different number of arguments and diagnostic types." << std::endl;
 			exitflag=1;
 			}
 		// Diagnostic - sensitivity of each diagnostic: variance
-		std::vector<double> sensAllBetas = stringToNumVec(pv[88]);
-		checkExit = checkPositive(sensAllBetas, 88); if (checkExit==1){exitflag=1;}
-		if (sensAllBetas.size() != params.diagnosticTypes.size()){
+		std::vector<double> sensAllVars = stringToNumVec(pv[88]);
+		checkExit = checkPositive(sensAllVars, 88); if (checkExit==1){exitflag=1;}
+		if (sensAllVars.size() != params.diagnosticTypes.size()){
 			std::cout << "ERROR (config 79 and 88): Different number of arguments and diagnostic types." << std::endl;
 			exitflag=1;
 			}
@@ -745,8 +822,8 @@ if(params.diagnostic_on == true){
 			params.diagnosticConstraintFuncFileTypes[d_type] = stringToStringVec(dFuncFileTypes.at(dt2));
 			params.testStartToCompleteLag[d_type] = std::make_tuple(testStartToCompleteMeans.at(dt2),
 				testStartToCompleteVars.at(dt2));
-			params.sensitivity[d_type] = std::make_tuple(sensAllAphas.at(dt2),
-				sensAllBetas.at(dt2));
+			params.sensitivity[d_type] = std::make_tuple(sensAllMeans.at(dt2),
+				sensAllVars.at(dt2));
 		}	// end "for each diagnostic type"
 
 		// Put diagnostic rules into containers
@@ -1215,3 +1292,7 @@ bool File_manager::limitedValues(std::vector<std::string>& svec,
 
 	return exitflag;
 }
+
+
+
+

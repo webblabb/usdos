@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 #ifndef Control_resource_h
 #define Control_resource_h
 

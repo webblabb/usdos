@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 #include <cmath>
 #include <iostream>
 #include <algorithm>

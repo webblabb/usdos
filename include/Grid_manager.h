@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 #ifndef Grid_manager_h
 #define Grid_manager_h
 
@@ -48,6 +49,7 @@ class Grid_manager
 			FIPS_map; // key is fips code, value is county object
         std::vector<County*>
             FIPS_vector;
+        std::vector<std::vector<double>> county_distance_matrix; //Use county->get_idx() for indices.
 		// key is fips code, then species name, then sorted by population size
 		std::unordered_map<std::string,
         std::unordered_map< std::string, std::vector<Farm*> >> fipsSpeciesMap;
@@ -86,7 +88,6 @@ class Grid_manager
 		std::string USAMM_temporal_name;
 		std::map<Farm_type*, USAMMv2_parameters> usammv2_parameters;
 		std::vector<USAMMv3_parameters> usammv3_parameters;
-		std::unordered_map<std::string, Farm_type*> farm_types_by_herd;
 		std::unordered_map<std::string, Farm_type*> farm_types_by_name;
 		std::vector<Farm_type*> farm_types_vec;
 		std::map<Farm_type*, std::set<Prem_class*>> prem_classes_by_ft; //Farm, feedlot, market.
@@ -116,6 +117,8 @@ class Grid_manager
 		///Keeps track of the current USAMM time period (ie. which quarter or month) and updates it
 		///in necessary. Returns a flag indicating if USAMM parameters need to be updated to
 		///match a new period.
+		        //Connects premises to commuter ids (swine production health plans).
+        void initCOM();
 		bool updateUSAMMTimePeriod(int t, int day_of_year);
 		///Calculates the county-level shipping probabilities based on the
 		///current state-level parameters and
@@ -160,8 +163,6 @@ class Grid_manager
 			const std::vector<Farm*>&, std::multimap<double, Farm*>&); ///< From vector of premises to check, adds premises that are within radius to multimap of neighbors
 		void add_premisesWithoutDistance(const std::vector<Farm*>&,
 			std::multimap<double, Farm*>&); ///< Adds premises as neighbors without specifying distance
-		void fill_premisesDistances(Farm*); ///< Fill in missing distances to other premises
-
 		// functions for infection evaluation
 		double shortestCellDist2(Grid_cell*, Grid_cell*); ///< Calculates (shortest distance between two cells)^2
 		void makeCellRefs(); ///< Calculates and stores kernel values and other pre-processing tasks
@@ -211,6 +212,11 @@ class Grid_manager
 		void printCells();
 		void get_neighborsInRadius(Farm*, const double, const double, const bool,
 			std::multimap<double, Farm*>&); ///< Return neighboring premises within radius
+
+		void get_distances(Farm* focal, const bool distanceRequired, std::multimap<double, Farm*>& output);
+		
+		void fill_premisesDistances(Farm*); ///< Fill in missing distances to other premises
+
 		void get_neighborCellsByState(Grid_cell*, std::string,
 			std::vector<std::string>&, bool, std::vector<Grid_cell*>&);
 		int get_parentCell(double, double, std::string);
@@ -249,7 +255,7 @@ class Grid_manager
 		///Returns the remaining number of days in the current period.
 		size_t get_rem_days_of_period();
 
-        Farm_type* get_farm_type_by_herd(std::string herd); //Returns pointer to type based on what species are present on a farm.
+        Farm_type* get_farm_type_by_abbr(std::string abbr);
 		Farm_type* get_farm_type_by_name(std::string name);
 		std::vector<Farm_type*> get_farm_types() { return farm_types_vec; }
 		Prem_class* get_prem_class(std::string class_str, Farm_type* ft);

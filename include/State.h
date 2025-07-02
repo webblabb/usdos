@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 /* A state, inherits from region */
 
 #ifndef STATE_H
@@ -26,8 +27,10 @@ public:
     ~State();
 
     void add_county(County* in_county);
-    void set_a(double in_a, Farm_type* in_type);
-    void set_b(double in_b, Farm_type* in_type);
+    void set_aCVI(double in_a, Farm_type* in_type);
+    void set_bCVI(double in_b, Farm_type* in_type);
+    void set_aCOM(double in_a, Farm_type* in_type);
+    void set_bCOM(double in_b, Farm_type* in_type);
     void set_N(double in_N, Farm_type* in_type);
     void set_N_per_day(double in_daily_N, Farm_type* in_type);
     void set_N_rem(double in_rem_N, Farm_type* in_type);
@@ -35,8 +38,10 @@ public:
     void set_s(double in_s, Farm_type* in_type);
     void set_std(double in_std, Farm_type* in_type);
     void set_kurt(double in_kurt, Farm_type* in_type);
-    void set_inflow(double in_inflow, Farm_type* in_type);
-    void set_outflow(double in_outflow, Farm_type* in_type);
+    void set_inflowCVI(double in_inflow, Farm_type* in_type);
+    void set_outflowCVI(double in_outflow, Farm_type* in_type);
+    void set_inflowCOM(double in_inflow, Farm_type* in_type);
+    void set_outflowCOM(double in_outflow, Farm_type* in_type);
     void set_shipping_parameters_USAMMv2(int USAMM_version, USAMMv2_parameters& usamm_par,
                                          Farm_type* ft, std::string time_period,
                                          size_t days_in_period, size_t days_rem);
@@ -50,16 +55,20 @@ public:
 
     int get_code();
     std::string get_code_str();
-    double get_a(Farm_type* ft);
-    double get_b(Farm_type* ft);
+    double get_aCVI(Farm_type* ft);
+    double get_bCVI(Farm_type* ft);
+    double get_aCOM(Farm_type* ft);
+    double get_bCOM(Farm_type* ft);
     double get_N(Farm_type* ft);
     double get_remaining_N(Farm_type* ft);
     std::unordered_map<Farm_type*, double> get_N_map();
     double get_null_lambda(Farm_type* ft);
     double get_shipping_rate(Farm_type* ft); //This returns the sum of all member farms' weights multiplied by null_lambda.
     double get_s(Farm_type* ft);
-    double get_inflow(Farm_type* ft);
-    double get_outflow(Farm_type* ft);
+    double get_inflowCVI(Farm_type* ft);
+    double get_outflowCVI(Farm_type* ft);
+    double get_inflowCOM(Farm_type* ft);
+    double get_outflowCOM(Farm_type* ft);
     double get_total_farm_oweight_sum(); //Needed when figuring out probability that shipments originate from unaffected farms ( P(unaffected) = P(Total weight) - P(affected) ).
     std::unordered_map<Farm_type*, double> get_null_lambda_map();
     std::vector<County*> get_member_counties();
@@ -77,8 +86,10 @@ private:
     std::vector<County*> member_counties;
     std::unordered_set<Farm_type*> farm_types_present;
     bool state_initialized = false;
-    std::unordered_map<Farm_type*, double> a_map;
-    std::unordered_map<Farm_type*, double> b_map;
+    std::unordered_map<Farm_type*, double> aCVI_map;
+    std::unordered_map<Farm_type*, double> bCVI_map;
+    std::unordered_map<Farm_type*, double> aCOM_map;
+    std::unordered_map<Farm_type*, double> bCOM_map;
     std::unordered_map<Farm_type*, double> N_map;
     std::unordered_map<Farm_type*, double> daily_N_map;
     //rem_N_map stores what is left between the current timestep and the end of the current time period (e.g. quarter).
@@ -92,8 +103,10 @@ private:
     std::unordered_map<Farm_type*, double> std_map;
     std::unordered_map<Farm_type*, double> kurt_map;
 //    std::unordered_map<Farm_type*, double> inflow_map;
-    std::vector<double> inflow_vec;
-    std::unordered_map<Farm_type*, double> outflow_map;
+    std::vector<double> inflowCVI_vec;
+    std::unordered_map<Farm_type*, double> outflowCVI_map;
+    std::vector<double> inflowCOM_vec;
+    std::unordered_map<Farm_type*, double> outflowCOM_map;
 
     virtual void set_initialized(bool& parameter);
     virtual void all_initialized();

@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 #ifndef Status_manager_h
 #define Status_manager_h
 
@@ -79,8 +80,13 @@ class Status_manager
 		std::unordered_map<std::string, Region_status*> changedCoStatus; ///< Counties that have had any status change
 		std::unordered_map<std::string, Region_status*> changedStateStatus; ///< States that have had any status change
 		std::vector<Prem_status*> newPremReports; ///< Starting index for newly reported premises
+		std::vector<std::string> controlsTriggered;
 		std::vector<Region_status*> newCoReports; ///< Starting index for newly reported counties
 		std::vector<Region_status*> newStateReports; ///< Starting index for newly reported states
+		double allPremReports;
+		double percentIncrease;
+		std::unordered_map<std::string, double> waitlistFlag;
+		//double waitlistFlag;
 
 		std::vector<Prem_status*> newPremSuspects; ///< Starting index for newly suspects premises
 		std::vector<Prem_status*> newPremVaxs; ///< Starting index for newly effective vaccinated premises
@@ -97,7 +103,6 @@ class Status_manager
 		std::unordered_map<std::string, std::vector<Farm*>> toTest; ///< premises to test for each diagnostic type
 		std::vector<int> dcsPerIP;
 
-		std::unordered_map<Control_resource*, int> controlResourceLevels; // availability (keyed by control resource)
 		std::unordered_map<std::string, std::unordered_map<Farm*, int>> partiallyControlledPrems; // key control type, then farm, value is animals remaining to be controlled
 		std::unordered_map<Diagnostic_resource*, int> diagnosticResourceLevels; // availability (keyed by diagnostic resource)
 		std::unordered_map<std::string, std::unordered_map<Farm*, int>> partiallyTestedPrems; // key diagnostic type, then farm, value is animals remaining to be tested
@@ -157,12 +162,19 @@ class Status_manager
 		int get_numRegionsWithControlStatus(std::string, std::string);
  		int get_numCountiesReported() const; //inlined
  		int get_numStatesReported() const; //inlined
+ 		double get_numNewPremsReported() const; //inlined
 		void newNotSus(std::vector<Farm*>&); //inlined
 		std::string getAny_fileStatus(Farm*) const;
 		std::string getAny_diseaseStatus(Farm*) const; // exists to output "sus" in case of no Prem_status
 		std::string getAny_diagnosticStatus(Farm*);
 		std::string formatRepSummary(int, int, double);
+        std::string formatWaitlistSummary(int,int);
+        std::vector<std::tuple<int, std::string>> printed; //vector of tuple pairs to track which farms/controlStatus pairs have already been printed
+        std::string formatControlSummary(int, int);
 		std::string formatDetails(int, int);
+		std::vector<double> reportNumbers; ///Vector used to calculate percentIncrease between two timesteps
+		std::vector<double> reportDecreaseNumbers; ///Vector to track how many days since the last percentIncrease in newPremReports
+		double decrease; ///Number of days in which the percent increase in number of newPremReports is <= 0
 
 		void add_waitlistMembers(int);
 		void add_diagnosticWaitlistMembers(int);
@@ -174,6 +186,8 @@ class Status_manager
         Prem_status* get_correspondingPremStatus(int fid);
         const std::unordered_map<std::string, std::vector<double>>& get_normInf_map() const;
         const std::unordered_map<std::string, std::vector<double>>& get_normSus_map() const;
+        std::unordered_map<Control_resource*, int> controlResourceLevels; // availability (keyed by control resource)
+
 
         //Members specific to btb only.
         void btb_updateDisease(int t, int quarter_idx);
@@ -196,6 +210,11 @@ inline int Status_manager::get_numCountiesReported() const
 inline int Status_manager::get_numStatesReported() const
 {
 	return reportedStates.size();
+}
+
+inline double Status_manager::get_numNewPremsReported() const
+{
+	return newPremReports.size();
 }
 
 #endif // Status_manager_h

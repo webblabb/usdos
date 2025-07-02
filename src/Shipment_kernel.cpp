@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 #include <Shipment_kernel.h>
 #include <County.h>
 #include <shared_functions.h>

@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 #include "Control_resource.h"
 
 Control_resource::Control_resource(resourceLocation locInfo, 

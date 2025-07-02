@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 #ifndef Local_spread_h
 #define Local_spread_h
 

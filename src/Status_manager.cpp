@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 #include "Status_manager.h"
 #include "shared_functions.h"
 
@@ -149,13 +150,13 @@ Status_manager::Status_manager(std::vector<Farm*>& focalFarms, const Parameters*
             }
         }
 
-if (verbose>1){
-	std::cout<<focalFarms.size()<<" exposed premises initiated. End times for exposed premises: "<<std::endl;
-	for (auto& e : diseaseStatuses.at("exp").units){
-		std::cout << e->get_end("exp") << ", ";
-	}
-	std::cout<<std::endl;
-}
+//if (verbose>1){
+//	std::cout<<focalFarms.size()<<" exposed premises initiated. End times for exposed premises: "<<std::endl;
+//	for (auto& e : diseaseStatuses.at("exp").units){
+//		std::cout << e->get_end("exp") << ", ";
+//	}
+//	std::cout<<std::endl;
+//}
 
 if(verbose > 0){
 	std::cout << "Status manager initiated."<<std::endl;
@@ -164,7 +165,7 @@ if(verbose > 0){
 
 Status_manager::~Status_manager()
 {
-	for (auto& f:changedStatus){delete f.second;}
+    for (auto& f:changedStatus){delete f.second;}
 	for (auto& c:changedCoStatus){delete c.second;}
 	for (auto& c:changedStateStatus){delete c.second;}
 	if(btb_slaughter_ofs.is_open())
@@ -300,8 +301,8 @@ if(verbose>1){std::cout<<"SM::set_status: Setting "<<fid<<" status to ";}
 				// determine which of potential dangerous contacts will be dangerous contacts
 				std::unordered_map<Farm*, std::vector<bool>> pDCs =
 					*(changedStatus.at(fid)->Prem_status::get_potentialDCs());
-//if(verbose>1 && pDCs.size()>0){
-	std::cout<<"SM::Reported farm has "<<pDCs.size()<<" potential DCs"<<std::endl;//}
+if(verbose>1 && pDCs.size()>0){
+	std::cout<<"SM::Reported farm has "<<pDCs.size()<<" potential DCs"<<std::endl;}
 				for (auto& dc:pDCs){ // dc.first is prem to evaluated as DC
 if (verbose>1)std::cout<<"SM::set_status inside loop over DCs"<<std::endl;
 if (verbose>1){std::cout<<dc.first->Farm::get_id()<<" is DC/reported? "<<getAny_fileStatus(dc.first)<<std::endl;}
@@ -659,9 +660,10 @@ void Status_manager::updateFile(int t)
 /// Check time for time dependent resource boost (i.e. for additional vaccine doses)
 void Status_manager::update_ControlResources(int t)
 {
-	for (auto& ct:(parameters->controlTypes)){
+		for (auto& ct:(parameters->controlTypes)){
 		std::string c_type = ct;
  	   	std::string c_constraint = (parameters->constraintFunctions).at(ct);
+ 	   	
 		if((c_type.compare("vax")==0) && (c_constraint.compare("nationalLimit")==0)){
 			Control_resource* cr = controlResources->at("vax").at("all");
 				if (controlResourceLevels.count(cr)==0){ //if levels for this control resource are not yet being tracked
@@ -684,10 +686,11 @@ void Status_manager::update_ControlResources(int t)
 				} }else{if(verbose>1)
 					std::cout << "SM: First reported time not yet recorded" << std::endl;
 					}
-		} }
+			//	std::cout<<"Available resources at this time point are for "<<c_type<<" are "<<cr->Control_resource::get_capacity()<<std::endl;
+		} 
+	}
 	}
 }
-
 
 /// Update file and control statuses (wrapper for update() function)
 /// \param[in] t Timestep
@@ -780,8 +783,8 @@ bool Status_manager::eval_probHerdPositive(Farm* f, int t, int quarter_idx, std:
                      n = changedStatus.at(fid)->Farm::get_size_allSpecies();
                 }
 
-				double betaDraw = draw_beta(std::get<0>(sens), std::get<1>(sens));
-				double bracket =1-betaDraw;
+				double normDraw = draw_norm(std::get<0>(sens), std::get<1>(sens));
+				double bracket =1-normDraw;
 				double probNCatNeg = pow(bracket, n);
 				double probHerdPositive = 1-probNCatNeg;
 		 		double random = uniform_rand();
@@ -794,8 +797,8 @@ bool Status_manager::eval_probHerdPositive(Farm* f, int t, int quarter_idx, std:
                     changedStatus.at(fid)->Prem_status::get_diseaseStatus()=="btb")
             {
                 int n_infected = changedStatus.at(fid)->btb_get_N_infected();
-                double betaDraw = draw_beta(std::get<0>(sens), std::get<1>(sens));
-				int n_positive = draw_binom(n_infected, betaDraw);
+                double normDraw = draw_norm(std::get<0>(sens), std::get<1>(sens));
+				int n_positive = draw_binom(n_infected, normDraw);
 		 		if (n_positive > 0)
                 {
 		 			output = true;
@@ -1288,7 +1291,6 @@ void Status_manager::eval_exposure(int t, int quarter_idx)
 			}
 		} // end "if control on"
 	} // end "for each exposure to evaluate"
-
 	if(verbose>0){
 		std::cout<<localCount<<" local infections (may include double-counted)"<<std::endl;
 		std::cout<<shipCount<<" shipping infections (may include local)"<<std::endl;
@@ -1443,6 +1445,7 @@ void Status_manager::report_countyAndState(Farm* f, int t)
 	}
 }
 
+
 /// Passes conditions about current status of outbreak (number of premises infected, etc)
 /// and checks if control rules indicate a control action should be triggered. Adds
 /// premises or regions to appropriate waitlists.
@@ -1453,13 +1456,31 @@ std::cout<<"SM::add_waitlistMembers: Checking for control triggers: "<<newPremRe
 newCoReports.size()<<" new county reports, "<< newStateReports.size()<<" new state reports"<<std::endl;
 }
 	// statsForControlTriggers and waitlistGroup structs defined in Control_manager
-	statsForControlRules stats{&newPremReports, &newCoReports, &newStateReports, t};
+	statsForControlRules stats{&newPremReports, &newCoReports, &newStateReports, percentIncrease, decrease, controlsTriggered, controlResourceLevels, waitlistFlag, t};
 	std::vector<waitlistGroup> instructions;
 	controlManager->check_controlRules(stats, instructions); // writes waitlist info to instructions
 	// add to waitlist according to instructions
 	for (auto& i:instructions){
+
 		std::string controlType = i.controlType;
 		std::string controlScale = i.scaleType;
+		double controlSize = i.premList.size();
+
+		//start tracking what controls have been triggered
+		if(controlSize>0 && (std::find(controlsTriggered.begin(), controlsTriggered.end(), controlType) == controlsTriggered.end())){		
+			controlsTriggered.emplace_back(controlType);
+		}
+
+//std::cout<<"replaceControl check. Is it on? "<<i.replaceControl<<std::endl;
+//precursor to replace control actions (if cull has been called already this would allow us replace cull with a different type of cull and turn off the old type.)
+//		if((i.replaceControl = 1) && (std::find(controlsTriggered.begin(), controlsTriggered.end(), controlType) == controlsTriggered.end())){
+//			for (auto& cTriggered:controlsTriggered){
+//				std::cout<<"SM::replaceControl check. So far: "<<cTriggered<<std::endl;
+//			}
+//		}else{
+//			std::cout<<"SM::replaceControl waitlist[controlType] output: "<<controlType<<std::endl;
+//		}
+
 		if (controlScale.compare("premises")==0){
 			for (auto& f:i.premList){
 				int fid = verify_premStatus(f);
@@ -1481,8 +1502,37 @@ if(verbose>1){std::cout<<"File status of new waitlist member: "<<fileStatus<<std
 		}
 	}
 
+ 	// clear newly reported
+	//Start tracking numbers of newly reported premises if reports have begun.
+	//Start calculating percentIncrease if number of reports have started to be tracked
+	allPremReports += newPremReports.size();
+	if (newPremReports.size()>0 && reportNumbers.size()==0){
+		reportNumbers.emplace_back(newPremReports.size());
+	}else if(newPremReports.size()>0 && reportNumbers.size()==1){ 
+		reportNumbers.emplace_back(newPremReports.size());
+		percentIncrease = ((reportNumbers[1]-reportNumbers[0])/reportNumbers[0])*100;
+		reportNumbers.erase(reportNumbers.begin());
+	}else {
+		percentIncrease = newPremReports.size(); //percentIncrease is zero
+		if(reportNumbers.size()>0){ //Clear the vector if there was no increase following a day of increase (starting fresh for pI calcuation)
+			reportNumbers.clear();
+		}
+	}
+	if(verbose>1){std::cout<<newPremReports.size() << " Farm(s) added. Now "<< allPremReports<< " farms have been reported."<< std::endl;}
+	if(verbose>1){std::cout<<"Percent increase in number of farm reports for this time step was "<< percentIncrease<< std::endl;}
 
-	// clear newly reported
+
+//Track the number of timesteps where there are no new prem reports or decreasing number of cases. 
+	if(newPremReports.size()==0 || percentIncrease <= 0){
+		reportDecreaseNumbers.emplace_back(newPremReports.size());
+		decrease = reportDecreaseNumbers.size();
+	}else{
+		reportDecreaseNumbers.clear();
+		decrease = reportDecreaseNumbers.size(); //clear vector used to track if cases uptick again.
+//	std::cout<<"SM::percentIncrease calculation: clearing reportDecreaseNumbers vector"<<std::endl;
+	} 
+	if(verbose > 1){std::cout<<"Number of timesteps with no new reports or decreasing number of reports is: "<<decrease<<std::endl;}
+
 	newPremReports.clear();
 	newCoReports.clear();
 	newStateReports.clear();
@@ -1497,14 +1547,13 @@ if (verbose >1){
 }
 
 }
-
 /// Passes conditions about current status of outbreak (number of premises infected, etc)
 /// and checks if diagnostic rules indicate a diagnostic action should be triggered. Adds
 /// premises or regions to appropriate diagnoistic waitlists.
 void Status_manager::add_diagnosticWaitlistMembers(int t)
 {
-	//verbose >1 &&
-	if (newPremReports.size()+newPremSuspects.size()>0){
+	
+	if (verbose >1 && newPremReports.size()+newPremSuspects.size()>0){
 	std::cout<<"SM::add_diagnosticWaitlistMembers: Checking for diagnostic triggers: "<<newPremReports.size()<<" new prem reports, "<<
 	newPremSuspects.size()<<" new prem suspects "<<newPremVaxs.size()<<" new prem vaxs"<<std::endl;
 	}
@@ -1555,19 +1604,27 @@ if (verbose >1){
 
 /// For any control types with waitlist, checks with Control_manager to determine what
 /// control is implemented for which farms/regions, based on constraint availability
+/// This function also tracks how long a particular control type waitlist has remained unchanged.
 void Status_manager::add_implemented(int t)
 {
 	for (auto& w:waitlist){ // for each control type (w.first)
 		if (w.second.size()>0){
 			std::vector<Farm*> updatedWaitlist;
 			std::vector<Farm*> toImplement;
-
 			controlManager->filter_constraints(w.first, w.second, updatedWaitlist, toImplement,
                                                controlResourceLevels, partiallyControlledPrems);
+				
+			if(w.second==updatedWaitlist){ //if the contents of the waitlist remain unchanged after filter_constraints()
+				waitlistFlag[w.first]+=1;
+				if(verbose>1){std::cout<<"add_implemented: no farms have come off of "<<w.first<<" waitlist this time step. Waitlist has now been halted for "<<waitlistFlag[w.first]<<"."<<std::endl;}
+			} else{ //reset tracking if the waitlist changes
+				waitlistFlag[w.first]=0;
+				if(verbose>1){std::cout<<"add_implemented: "<<w.first<<" waitlist has changed this timestep. Setting WF to: "<<waitlistFlag[w.first]<<std::endl;}
+			}
 
 			w.second = updatedWaitlist;
 			std::tuple<double, double>  duration = allControlTypes->at(w.first)->implementDuration;
- 			std::cout<<"SM:add_implemented: "<<toImplement.size()<<" is the size of to Implement at control type "<<w.first<<std::endl;
+ 			//std::cout<<"SM:add_implemented: "<<toImplement.size()<<" is the size of to Implement at control type "<<w.first<<std::endl;
 
 			for (auto& i:toImplement){
 				// add to control list & add probPreventExposure values
@@ -1576,6 +1633,7 @@ void Status_manager::add_implemented(int t)
 
 		}
 	}
+
 	for (auto& w:waitlistRegion){ // for each control type (w.first)
 		if (w.second.size()>0){
 			std::vector<std::string> updatedRegionWaitlist;
@@ -1852,6 +1910,8 @@ void Status_manager::add_potentialDC(Farm* f1, Farm* f2,
 /// Formats results for summary output file
 std::string Status_manager::formatRepSummary(int rep, int duration, double repTimeMS)
 {
+    std::cout<<"Entering formatRepSummary function...printing..."<<std::endl;
+
     //Get number of infectious premises and their respective counties.
     std::string inf_string = "inf";
     if(parameters->infectionType == InfectionType::BTB)
@@ -2041,6 +2101,80 @@ if(verbose>1){std::cout<<"toPrint: "<<toPrint<<std::endl;}
 	return toPrint;
 }
 
+/// Format controlSummary file. Pulls and prints each farm's
+/// control status (implemented, effective, inactive) with its ID,
+/// FIPS code, the timestep, and replicate. Only prints farms
+/// whose controlStatuses have changed, so that not every farm
+/// is printed each timestep.
+std::string Status_manager::formatControlSummary(int rep, int t)
+{
+    std::string toPrint;
+    
+    if (controlStatuses.size()>0){
+        for (auto& info:controlStatuses){
+            std::string cStatus = std::get<0>(info); //pull control status
+            std::vector<Prem_status*> prems = controlStatuses.at(cStatus).units; //vector of prems with each status
+            
+            for(auto& i:prems){
+               std::string FIPS = i->Farm::get_parent_county()->get_id();
+               int fid = i->Farm::get_id();
+                
+                if(std::find(printed.begin(), printed.end(), make_tuple(fid,cStatus)) != printed.end()){
+                    continue; //skip loop if {fid,cStatus} pair found in vector. Checks to see if farm status has changed
+                }else{ //if {fid,cStatus} pair not previously printed, go ahead and print new line.
+                    addItemTab(toPrint, rep); // rep
+                    addItemTab(toPrint, t); //timestep
+                    addItemTab(toPrint, fid); //farm ID
+                    addItemTab(toPrint, FIPS); //FIPS
+                    addItemTab(toPrint, cStatus); //farm control status
+                    toPrint.replace(toPrint.end()-1, toPrint.end(), "\n");
+                    printed.emplace_back(std::make_tuple(fid,cStatus));
+                }//checks to see if that fid has already been printed
+            }
+        }
+    }
+    if(parameters->printControl == 3){
+        std::string out = Status_manager::formatWaitlistSummary(rep,t);
+        toPrint+=out;
+    }
+    return toPrint;
+}
+
+/// Format waitlistSummary file. Pulls and prints each farm's
+/// control status (implemented, effective, inactive) with its ID,
+/// FIPS code, the timestep, and replicate. Only prints farms
+/// whose controlStatuses have changed, so that not every farm
+/// is printed each timestep.
+std::string Status_manager::formatWaitlistSummary(int rep, int t)
+{
+    std::string toPrint;
+            if(waitlist.size()>0){
+             //   std::string waitlistedControl = waitlist.first;
+                for (auto& info:waitlist){
+                    std::string cStatus = info.first; //pull control status
+                    std::vector<Farm*> waitlistedFarm = info.second;
+
+                    for(auto& i:waitlistedFarm){
+                       std::string FIPS = i->Farm::get_parent_county()->get_id();
+                       int fid = i->Farm::get_id();
+                        
+                        if(std::find(printed.begin(), printed.end(), make_tuple(fid,"waitlist."+cStatus)) != printed.end()){
+                            continue; //skip loop if {fid,cStatus} pair found in vector. Checks to see if farm status has changed
+                        }else{ //if {fid,cStatus} pair not previously printed, go ahead and print new line.
+                            addItemTab(toPrint, rep); // rep
+                            addItemTab(toPrint, t); //timestep
+                            addItemTab(toPrint, fid); //farm ID
+                            addItemTab(toPrint, FIPS); //FIPS
+                            addItemTab(toPrint, "waitlist."+cStatus); //farm control status
+                            toPrint.replace(toPrint.end()-1, toPrint.end(), "\n");
+                            printed.emplace_back(std::make_tuple(fid,"waitlist."+cStatus));
+                        }//checks to see if that fid has already been printed
+                    }
+                }
+            }
+    return toPrint;
+}
+
 /// Formats details regarding exposed farms (excluding the initial seed) for output to
 /// file. If a farm was exposed through multiple routes (i.e. local spread and shipping),
 /// each of those exposure events are recorded on a line, even if they occurred at the
@@ -2050,6 +2184,7 @@ if(verbose>1){std::cout<<"toPrint: "<<toPrint<<std::endl;}
 std::string Status_manager::formatDetails(int rep, int t)
 // rep, ID, time, sourceID, method - not including initial seeds
 {
+//    std::cout<<"Entering formatDetail function...printing..."<<std::endl;
 	std::string toPrint;
 
 	if (sources.size()>0){

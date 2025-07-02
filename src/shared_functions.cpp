@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 #include <stdio.h>
 #include "shared_functions.h"
 #include "Farm.h"
@@ -380,22 +381,23 @@ void printLine(std::string& outputFile, std::string& printString)
 
 unsigned int get_n_lines(std::ifstream& f)
 {
-//    unsigned int n_lines = 0;
-//    std::string tempstring;
-//    f.seekg(0, f.beg);
-//    while(!f.eof())
-//    {
-//        f.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-//        n_lines++;
-//    }
-//    f.clear();
-//    f.seekg(0, f.beg);
-
     f.unsetf(std::ios_base::skipws);
     unsigned n_lines = std::count(
         std::istream_iterator<char>(f),
         std::istream_iterator<char>(),
         '\n');
+    f.clear();
+
+    //Extract the last character. If it is "\n" the count will be correct.
+    //If it's something else this is a file that doesn't end with "\n" and the
+    //Last line will be uncounted so add 1 to the count in that case.
+    f.seekg(-1, f.end);
+    char c;
+    f.get(c);
+    if(c != '\n')
+    {
+        ++n_lines;
+    }
     f.clear();
     f.seekg(0, f.beg);
     return n_lines;
@@ -453,10 +455,21 @@ int read_table(std::string fname, char delim, bool has_header,
     return 0;
 }
 
-
-std::string trim(const std::string &s) //Removes whitespace around string.
+std::string trim(const std::string &s)
 {
-    auto wsfront=std::find_if_not(s.begin(),s.end(),[](int c){return std::isspace(c);});
-    auto wsback=std::find_if_not(s.rbegin(),s.rend(),[](int c){return std::isspace(c);}).base();
-    return (wsback<=wsfront ? std::string() : std::string(wsfront,wsback));
+   auto wsfront=std::find_if_not(s.begin(),s.end(),[](int c){return std::isspace(c);});
+   auto wsback=std::find_if_not(s.rbegin(),s.rend(),[](int c){return std::isspace(c);}).base();
+   return (wsback<=wsfront ? std::string() : std::string(wsfront,wsback));
+}
+
+size_t pairing_function(int x, int y)
+{
+    if(y>x)
+    {
+        return size_t(y*y+x);
+    }
+    else
+    {
+        return size_t(x*x+x+y);
+    }
 }

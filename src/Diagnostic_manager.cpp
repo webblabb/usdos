@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 #include "Diagnostic_manager.h"
 #include "Diagnostic_resource.h"
 

@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 #ifndef Grid_checker_h
 #define Grid_checker_h
 

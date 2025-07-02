@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 #ifndef Diagnostic_manager_h
 #define Diagnostic_manager_h
 

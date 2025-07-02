@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 #include "Local_spread.h"
 #include "gsl/gsl_integration.h"
 

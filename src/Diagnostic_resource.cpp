@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 #include "Diagnostic_resource.h"
 
 Diagnostic_resource::Diagnostic_resource(int startLevel_in)

@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 #ifndef USAMM_PARAMETERS_H
 #define USAMM_PARAMETERS_H
 

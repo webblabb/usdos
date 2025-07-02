@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 #include "USAMMv2_parameters.h"
 
 #include <string>

@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 #include <iostream>
 #include <vector>
 #include <algorithm> // for std::max_element (susceptibility/infectiousness)

@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 #ifndef file_manager_h
 #define file_manager_h
 
@@ -24,6 +25,7 @@ struct controlRule
 	double target;
 	std::string priority;
 	double radiusSquared; ///< Used only if target = radius of neighbors, stored to avoid multiple calculations
+	double delay; ///< This rule is only used during flexible control strategy runs and is initialized with a value only if a flex.txt file is provided.
 };
 
 struct BtbWithinHerdParams
@@ -256,10 +258,13 @@ struct Parameters
 	// control parameters - maps keyed by controlType name
 	bool control_on;
 	std::vector<std::string> controlTypes;
+	std::string flexibleControl;
+	std::string flexibleControlFiles;
 	std::unordered_map<std::string, std::string> controlScales;
 	std::unordered_map<std::string, std::string> constraintFunctions;
 	std::unordered_map<std::string, std::vector<double>> constraintFuncParams;
 	std::unordered_map<std::string, std::vector<std::string>> constraintFuncFiles;
+	//std::unordered_map<std::string, std::vector<std::string>> flexibleControlFiles; //flexible control files
 	std::unordered_map<std::string, std::vector<std::string>> constraintFuncFileTypes;
 	std::unordered_map<std::string, std::tuple<double,double>> implementToEffectiveLag;
 	std::unordered_map<std::string, std::tuple<double,double>> effectiveToInactiveLag;
@@ -267,6 +272,7 @@ struct Parameters
 
 	// control rules
 	std::vector<controlRule> controlRules;
+	//std::vector<flexibleControlRule> flexibleControlRules;
 	std::vector<std::string> dcControlTypes;
 
 	// reporting parameters
@@ -341,6 +347,8 @@ class File_manager
 		const std::string getSettings(std::string&);
 		void readConfig(std::string&, bool);
 };
+
+
 
 inline const Parameters* File_manager::getParams()
 {

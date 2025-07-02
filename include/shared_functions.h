@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 /// \file
 
 #ifndef shared_functions_h
@@ -16,6 +17,19 @@
 
 
 #include "Farm.h"
+
+    //Typedefs of some multidimensional vectors.
+    typedef std::vector<double> Vec_d_1d;
+    typedef std::vector<Vec_d_1d> Vec_d_2d;
+    typedef std::vector<Vec_d_2d> Vec_d_3d;
+    typedef std::vector<Vec_d_3d> Vec_d_4d;
+    typedef std::vector<Vec_d_4d> Vec_d_5d;
+
+    typedef std::vector<int> Vec_i_1d;
+    typedef std::vector<Vec_i_1d> Vec_i_2d;
+    typedef std::vector<Vec_i_2d> Vec_i_3d;
+
+    typedef std::map<std::string, std::vector<double>> str_vec_map;
 
     //Shared functions
 	double uniform_rand(); ///< Uniform distribution random number generator
@@ -54,6 +68,8 @@
                    std::vector<std::vector<std::string>>& out,
                    char comment_char='#');
 	std::string trim(const std::string &s); //Removes whitespace around string.
+	size_t pairing_function(int x, int y); //Takes two natural numbers and returns a new number that is unique for that combination. Used for turning a combination of two prem classes into a single key for lookup in maps.
+
 
 template<typename T>
 T stringToNum(const std::string& text)

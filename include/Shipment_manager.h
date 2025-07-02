@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 #ifndef Shipment_manager_h
 #define Shipment_manager_h
 
@@ -12,6 +13,16 @@ extern int verboseLevel;
 
 class County;
 class Status_manager;
+
+typedef std::pair<County*, std::vector<Farm*>> c_farmvec_pair;
+typedef std::vector<c_farmvec_pair> Vec_cf_1d;
+typedef std::vector<Vec_cf_1d> Vec_cf_2d;
+typedef std::vector<Vec_cf_2d> Vec_cf_3d;
+
+typedef std::vector<Farm*> Vec_fp_1d;
+typedef std::vector<Vec_fp_1d> Vec_fp_2d;
+typedef std::vector<Vec_fp_2d> Vec_fp_3d;
+typedef std::vector<Vec_fp_3d> Vec_fp_4d;
 
 struct Shipment // used in Shipment, Status
 {
@@ -35,6 +46,7 @@ struct Shipment // used in Shipment, Status
 	std::string destIndType; ///< Industry type of destination premises (farm, feedlot, market).
 	int destSize; ///< Size of destination premises.
 	Prem_status* oPst; ///<The corresponding prem status of the origin farm if there is one.
+	std::string permitType;
 };
 
 struct coShipment{
@@ -56,7 +68,6 @@ class Shipment_manager
 	    std::vector<County*> allCounties; // list of all possible destination FIPS, based on premises file
         const std::unordered_map<std::string, std::unordered_map<std::string, std::vector<Farm*> >>* fipsSpeciesMap;
 		const Parameters* parameters;
-		Status_manager* S; ///< Const pointer to Status manager (to access up-to-date premises statuses)
 		std::vector<std::string> species;
 
 		int verbose; ///< Can be set to override global setting for console output
@@ -72,28 +83,23 @@ class Shipment_manager
 		std::vector<coShipment>
 			countyShipmentList; // coShipment defined above
 		int startRecentShips, startCoRecentShips; // indicates index in shipmentList where the most recent set of shipments starts
-
+        Vec_d_2d p_obs_COM_lookup_table;
 		// functions
 		void initialize();
-		Farm* largestStatus(std::vector<Farm*>&, std::string&); ///< Finds largest premises with "status", from vector sorted by population
 
 		///Creates and returns a pointer to a shipment struct.
 		Shipment* generateShipmentUSAMMv2(Farm* origin_farm, size_t timestep, size_t day_of_year,
                                           const std::string& time_period);
 
+        size_t make_cattle_shipment_volume(Farm* o_prem, Farm* d_prem, Prem_class* o_pcl, Prem_class* d_pcl,
+                                           std::string time_period, USAMMv3_parameters& up, Prem_class* mkt_pcl);
+        size_t make_swine_shipment_volume(Farm* o_prem, Farm* d_prem, Prem_class* o_pcl, Prem_class* d_pcl,
+                                          std::string time_period, USAMMv3_parameters& up);
+
 	public:
 		Shipment_manager(
 			const std::vector<County*> in_FIPS_vec, // a map of FIPS codes to farms
 			const std::unordered_map<std::string, std::unordered_map<std::string, std::vector<Farm*> >>* fipsSpMap, // sorted populations of species on farms
-			Status_manager* in_S,
-			const std::vector<std::string>& speciesOnPrems, // list of species on premises
-			const Parameters* p);
-
-        //Constructor without status manager. Used for network generation since that does not require keeping track of statuses.
-        Shipment_manager(
-			const std::vector<County*> in_FIPS_vec, // a map of FIPS codes to farms
-			const std::unordered_map<std::string, std::unordered_map<std::string, std::vector<Farm*> >>* fipsSpMap, // sorted populations of species on farms
-			const std::vector<std::string>& speciesOnPrems, // list of species on premises
 			const Parameters* p);
 
 		~Shipment_manager();
@@ -107,10 +113,13 @@ class Shipment_manager
         void makeShipmentsUSAMMv3(size_t timestep, size_t day_of_year, std::string time_period,
                                   int time_period_idx, std::vector<Shipment*>& output,
                                   std::vector<Farm*>& infFarms, std::vector<USAMMv3_parameters>& up_vec);
+        void makeShipmentsUSAMMv3_new(size_t timestep, size_t day_of_year, std::string time_period,
+                                  int time_period_idx, std::vector<Shipment*>& output,
+                                  std::vector<Farm*>& infFarms, std::vector<USAMMv3_parameters>& up_vec);
 
-        void makeNetworkUSAMMv3(size_t timestep, size_t day_of_year,
-                                std::string time_period, std::vector<Shipment*>& output,
-                                std::vector<USAMMv3_parameters>& up_vec);
+        void makeNetworkUSAMMv3(size_t timestep, size_t day_of_year, std::string time_period,
+                                int time_period_idx, std::vector<Shipment*>& output,
+                                std::vector<Farm*>& infFarms, std::vector<USAMMv3_parameters>& up_vec);
 		///Generates and writes to file a complete yearly network of shipments based on the shipment parameters.
 		void makeNetworkUSAMMv2(std::vector<std::string> out_fnames, Grid_manager& G);
 

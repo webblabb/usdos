@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 #ifndef KERNEL_F_H
 #define KERNEL_F_H
 

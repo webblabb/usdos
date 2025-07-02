@@ -1,3 +1,4 @@
+//© 2024 Colorado State University
 #ifndef FARM_H
 #define FARM_H
 
@@ -15,6 +16,7 @@ class County;
 class State;
 class Farm_type;
 class Shipment;
+class COM_prem_id;
 struct BtbWithinHerdParams;
 struct Parameters;
 struct Prem_class;
@@ -37,7 +39,6 @@ class Farm
         Point position;
 		County* parent_county;
 		int idx_in_county; //This prem is stored at this index of the vector of Farm object pointers in the parent county. Used in the shipment generation code.
-		State* parent_state;
 		Farm_type* farm_type;
 		std::string farm_type_str;
 		std::string fips; ///< County identifier (FIPS code)
@@ -50,6 +51,7 @@ class Farm
 		double yearly_slaughter_fraction = -1.0; ///< The proportion of this premises' inventory that goes to slaughter every year. Can be larger than 1.0.
 		double latest_shipping_rate = -1.0; ///< The total shipment rate from this premises according to last update of USAMMv3 parameters. Only set if shipments have been genereated from this premises.
 		Prem_class* prem_class;
+		COM_prem_id* COM_identifier = nullptr; ///<What commuter (swine producer health plan, SPHP) premises ID this Farm is associated with. Relevant when using USAMMv3 for swine.
 		double neighborRadiusCalculated; ///< If neighbors have been calculated and stored as distancesNeighbors, the radius searched (else 0)
 //		std::unordered_map< std::string, int > speciesCounts; ///< Numbers of animals of each type currently in use, keyed by types
 		std::vector< std::vector<int> > speciesCountsQuarterly; ///<Number of animals by farm type index and quarter.
@@ -57,6 +59,7 @@ class Farm
 		std::multimap<double, Farm*> distancesNeighbors; ///< Stored calculations of distances to neighboring premises
         int USAMMv3_size = 0; ///< The total number of animals on the premises. Used in the USAMMv3 shipment generation process.
         int USAMMv3_binned_size = 0; ///< The total number of animals on the premises binned according to the USAMMv3 premises size binning function.
+        double USAMMv3_log_normed_binned_size = 0.0; ///< The herd size binned according to the USAMMv3 premises size binning function, normalized against the average premises size and then logged.
 		int USAMMv3_unbinned_size_idx = 2;
 		std::map<Farm_type*, double> oweight; ///< The origin weight of this farm in relation to all other farms within the same state of the same type.
 		std::map<Farm_type*, double> normalized_oweight; ///< The origin weight of this farm in relation to all other farms within the same state of the same type, normalized so the sum of all farms in state = 1.0.
@@ -80,6 +83,7 @@ class Farm
         double get_sus_max() const; ///< Returns maximum susceptibility across quarters.
         double get_inf_max() const; ///< Returns maximum infectiousness where the partial transmission function peaks across quarters.
 		int get_USAMMv3_binned_size() const { return USAMMv3_binned_size; }
+		int get_USAMMv3_log_normed_binned_size() const { return USAMMv3_log_normed_binned_size; }
 		int get_USAMMv3_unbinned_size() const;
         double get_normalized_oweight(Farm_type* ft) const;
 		double get_unnormalized_oweight(Farm_type* ft) const;
@@ -100,7 +104,7 @@ class Farm
 		County* get_parent_county() const; //Inlined
 		int get_idx_in_county() { return idx_in_county; }
 		void set_idx_in_county(int idx) { idx_in_county = idx; }
- 		State* get_parent_state() const; //Inlined
+ 		State* get_parent_state() const;
  		const std::multimap<double, Farm*>* get_distancesNeighbors(); //inlined
  		double get_neighborRadiusCalculated() const; //inlined
  		void set_xy(double x, double y);
@@ -116,6 +120,7 @@ class Farm
  		void set_inf_all_quarters(const double);
  		void set_USAMMv3_size(int val) { USAMMv3_size = val; }
  		void set_USAMMv3_binned_size(int val) { USAMMv3_binned_size = val; }
+ 		void set_USAMMv3_log_normed_binned_size(int val) { USAMMv3_log_normed_binned_size = val; }
  		void set_inf_max(const double in_inf_max);
  		void set_normalized_oweight(const double in_oweight, Farm_type* ft);
  		void set_normalized_dweight(const double in_dweight, Farm_type* ft);
@@ -125,6 +130,9 @@ class Farm
 		void set_parent_county(County* in_county);
 		void set_distancesNeighbors(std::multimap<double, Farm*>&);
 		void set_neighborRadiusCalculated(const double);
+
+		void setCOMIdentifier(COM_prem_id* com_prem_id) { COM_identifier = com_prem_id; }
+		COM_prem_id* getCOMIdentifier() { return COM_identifier; }
 
 		static void update_current_quarter_idx(int quarter_idx) { current_quarter_idx = quarter_idx; }
 };
@@ -188,15 +196,13 @@ inline double Farm::get_neighborRadiusCalculated() const
 class Farm_type
 {
 public:
-    Farm_type(std::string herd, std::vector<std::string> in_species, unsigned int index);
+    Farm_type(std::string species, unsigned int index);
     ~Farm_type();
     std::string get_species() const { return species; }; //inlined
     unsigned int get_index() const { return index; }; //inlined
 private:
-    unsigned int index; // an index value relative to all other Farm_types
-    std::string herd; // a binary code (ie '01') unique to this Farm_type, used to indicate species composition
     std::string species; //ie dairy, beef, name for this farm type
-
+    unsigned int index; // an index value relative to all other Farm_types
 };
 
 struct Prem_class
