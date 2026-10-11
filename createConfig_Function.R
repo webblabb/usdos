@@ -338,7 +338,7 @@ createConfigs <- function(run.control = "noControl",  disease = 0, ...){
     ctrl.constraint.type <-  "stateSum"
     ctrl.scale <- "premises"
     cull.eff <- 1
-    ctrl.triggers <- "newRegionReportsOverX"
+    ctrl.triggers <- "newPremReportsOverX"
     ctrl.trigger.threshold <- "0"
     ctrl.trigger.response <- "cull"
   }
